@@ -1,5 +1,6 @@
 use crate::settings::pkg::PackageConfig;
 use crate::strategy::basic::BasicStrategy;
+use crate::strategy::python::PythonStrategy;
 use crate::strategy::rust::RustStrategy;
 use semver::Version;
 use serde::de::Error;
@@ -12,6 +13,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 pub mod basic;
+pub mod python;
 pub mod rust;
 
 /// Available release strategies.
@@ -22,6 +24,8 @@ pub mod rust;
 pub enum Strategy {
     /// The basic release strategy.
     Basic(BasicStrategy),
+    /// The [Python](https://www.python.org/) release strategy.
+    Python(PythonStrategy),
     /// The [Rust](https://www.rust-lang.org/) release strategy.
     Rust(RustStrategy),
 }
@@ -62,6 +66,7 @@ impl BaseStrategy for Strategy {
     fn write_version(&self, new_version: &Version, config: &PackageConfig) -> anyhow::Result<()> {
         match self {
             Strategy::Basic(strategy) => strategy.write_version(new_version, config),
+            Strategy::Python(strategy) => strategy.write_version(new_version, config),
             Strategy::Rust(strategy) => strategy.write_version(new_version, config),
         }
     }
@@ -69,6 +74,7 @@ impl BaseStrategy for Strategy {
     fn suggest_name(&self, dir: &Path) -> anyhow::Result<String> {
         match self {
             Strategy::Basic(strategy) => strategy.suggest_name(dir),
+            Strategy::Python(strategy) => strategy.suggest_name(dir),
             Strategy::Rust(strategy) => strategy.suggest_name(dir),
         }
     }
@@ -76,6 +82,7 @@ impl BaseStrategy for Strategy {
     fn suggest_packages(&self, dir: &Path) -> anyhow::Result<Vec<PackageConfig>> {
         match self {
             Strategy::Basic(strategy) => strategy.suggest_packages(dir),
+            Strategy::Python(strategy) => strategy.suggest_packages(dir),
             Strategy::Rust(strategy) => strategy.suggest_packages(dir),
         }
     }
@@ -85,6 +92,7 @@ impl Display for Strategy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Strategy::Basic(_) => write!(f, "basic"),
+            Strategy::Python(_) => write!(f, "python"),
             Strategy::Rust(_) => write!(f, "rust"),
         }
     }
@@ -102,6 +110,7 @@ impl FromStr for Strategy {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "basic" => Ok(Strategy::Basic(BasicStrategy::default())),
+            "python" => Ok(Strategy::Python(PythonStrategy::default())),
             "rust" => Ok(Strategy::Rust(RustStrategy::default())),
             &_ => Err(format!("unknown strategy `{s}`").to_string()),
         }
@@ -164,6 +173,7 @@ mod tests {
     /// Tests that a strategy's name is displayed when formatted.
     #[rstest]
     #[case::basic(Strategy::Basic(BasicStrategy::default()), "basic")]
+    #[case::python(Strategy::Python(PythonStrategy::default()), "python")]
     #[case::rust(Strategy::Rust(RustStrategy::default()), "rust")]
     fn display_strategy(#[case] strategy: Strategy, #[case] expected: &str) {
         assert_eq!(format!("{strategy}"), expected);
@@ -181,6 +191,7 @@ mod tests {
     /// Tests that the various strategy defaults can be resolved by their name.
     #[rstest]
     #[case::basic("basic", Strategy::Basic(BasicStrategy::default()))]
+    #[case::python("python", Strategy::Python(PythonStrategy::default()))]
     #[case::rust("rust", Strategy::Rust(RustStrategy::default()))]
     fn strategy_from_str(#[case] value: String, #[case] strategy: Strategy) {
         assert_eq!(Strategy::from_str(&value).unwrap(), strategy);

@@ -1,4 +1,5 @@
 use crate::strategy::Strategy;
+use crate::strategy::python::PythonStrategy;
 use crate::strategy::rust::RustStrategy;
 use anyhow::anyhow;
 use std::fs;
@@ -7,6 +8,9 @@ use std::path::Path;
 /// Tries to detect the release strategy for a given directory
 /// by looking at the files present.
 ///
+///   * [`PythonStrategy`]
+///     * `pyproject.toml`
+///     * `setup.py`
 ///   * [`RustStrategy`]
 ///     * `Cargo.toml`
 ///
@@ -16,6 +20,7 @@ pub fn detect_strategy<P: AsRef<Path>>(dir: &P) -> anyhow::Result<Strategy> {
     fs::read_dir(dir.as_ref())?
         .find_map(|entry| {
             entry.ok().and_then(|e| match e.file_name().to_str()? {
+                "pyproject.toml" | "setup.py" => Some(Strategy::Python(PythonStrategy::default())),
                 "Cargo.toml" => Some(Strategy::Rust(RustStrategy::default())),
                 _ => None,
             })
@@ -36,6 +41,8 @@ mod tests {
 
     /// Tests that a matching manifest file selects its release strategy.
     #[rstest]
+    #[case::python_pyproject_toml("pyproject.toml", Strategy::Python(PythonStrategy::default()))]
+    #[case::python_setup_py("setup.py", Strategy::Python(PythonStrategy::default()))]
     #[case::rust_cargo_toml("Cargo.toml", Strategy::Rust(RustStrategy::default()))]
     fn detect_strategy_with_file(#[case] filename: &str, #[case] expected: Strategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
