@@ -1,11 +1,11 @@
-use crate::commands::{config::ConfigCommand};
-use clap::{builder::PathBufValueParser, ColorChoice, Parser};
+use crate::commands::config::ConfigCommand;
+use clap::{ColorChoice, Parser, builder::PathBufValueParser};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use git_reflow_api::settings;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::{env, io};
-use tracing::{trace, error};
+use tracing::{error, trace};
 use tracing_log;
 use tracing_log::AsTrace;
 use tracing_subscriber;

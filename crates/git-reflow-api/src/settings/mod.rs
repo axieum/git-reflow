@@ -1,7 +1,8 @@
-use config::{Config, Environment, File};
 use crate::settings::pkg::PackageConfig;
-use std::path::PathBuf;
+use crate::strategy::BaseStrategy;
 use anyhow::Context;
+use config::{Config, Environment, File};
+use std::path::PathBuf;
 use tracing::{debug, trace};
 
 pub mod pkg;
@@ -44,13 +45,28 @@ impl AppConfig {
 
     /// Applies default values to missing configuration options.
     pub fn apply_defaults(mut self) -> anyhow::Result<Self> {
-        // Apply defaults to each package configuration
-        self.packages = self
-            .packages
-            .into_iter()
-            // For each package, cascade apply defaults
-            .map(|pkg| pkg.apply_defaults())
-            .collect::<anyhow::Result<Vec<_>>>()?; // Stop if any package fails to apply defaults
+        let mut packages = Vec::new();
+        for package in self.packages {
+            // For each package, cascade apply defaults.
+            let package = package.apply_defaults()?;
+
+            // If the package is a workspace, suggest nested packages and add them to the list.
+            let suggested_packages = if package.workspace {
+                package.strategy().suggest_packages(&package.dir)?
+            } else {
+                Vec::new()
+            };
+
+            // Add the package and any workspace packages to the list.
+            packages.push(package);
+            packages.extend(
+                suggested_packages
+                    .into_iter()
+                    .map(PackageConfig::apply_defaults)
+                    .collect::<anyhow::Result<Vec<_>>>()?,
+            );
+        }
+        self.packages = packages;
         Ok(self)
     }
 }
@@ -88,7 +104,9 @@ pub fn load(config_path: Option<PathBuf>) -> anyhow::Result<AppConfig> {
 
     // Load the configuration and deserialise it.
     let config = builder.build().context("failed to build config")?;
-    let result: AppConfig = config.try_deserialize().context("failed to deserialise config")?;
+    let result: AppConfig = config
+        .try_deserialize()
+        .context("failed to deserialise config")?;
 
     // Apply defaults to the configuration.
     let result = result.apply_defaults()?;
@@ -105,4 +123,53 @@ pub fn load(config_path: Option<PathBuf>) -> anyhow::Result<AppConfig> {
     // Return the resulting configuration.
     trace!("resulting configuration: {result:#?}");
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::strategy::{Strategy, basic::BasicStrategy};
+
+    /// Tests that defaults are applied with workspace discovery enabled.
+    #[test]
+    fn applies_defaults_with_workspace_discovery_enabled() {
+        let config = AppConfig {
+            packages: vec![PackageConfig {
+                dir: PathBuf::from("."),
+                strategy: Some(Strategy::Basic(BasicStrategy::default())),
+                ..Default::default()
+            }],
+        }
+        .apply_defaults()
+        .unwrap();
+
+        assert_eq!(config.packages.len(), 1);
+        assert_eq!(
+            config.packages[0].name(),
+            std::env::current_dir()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        );
+    }
+
+    /// Tests that workspace discovery is skipped when disabled.
+    #[test]
+    fn skips_workspace_discovery_when_disabled() {
+        let config = AppConfig {
+            packages: vec![PackageConfig {
+                dir: PathBuf::from("."),
+                strategy: Some(Strategy::Basic(BasicStrategy::default())),
+                workspace: false,
+                ..Default::default()
+            }],
+        }
+        .apply_defaults()
+        .unwrap();
+
+        assert_eq!(config.packages.len(), 1);
+        assert!(!config.packages[0].workspace);
+    }
 }

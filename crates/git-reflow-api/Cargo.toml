@@ -7,5 +7,11 @@ license.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 config = { version = "0.15.25", features = ["json", "json5", "toml", "yaml"] }
+semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 tracing = "0.1.44"
+
+[dev-dependencies]
+assert_fs = "1.1.4"
+rstest = "0.26.1"
