@@ -18,7 +18,7 @@ pub struct PackageConfig {
     pub name: Option<String>,
     /// The release strategy.
     ///
-    /// **Default:** \<auto detected>
+    /// **Default:** `<auto-detected>`
     #[serde(deserialize_with = "crate::strategy::string_or_struct")]
     pub strategy: Option<Strategy>,
     /// If `true`, detect nested packages if any.

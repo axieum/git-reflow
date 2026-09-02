@@ -114,7 +114,8 @@ pub fn load(config_path: Option<PathBuf>) -> anyhow::Result<AppConfig> {
     // Print debug information about the found packages.
     for pkg in &result.packages {
         debug!(
-            "📦 found package '{}' at '{}'",
+            "📦 found {} package '{}' at '{}'",
+            pkg.strategy(),
             pkg.name.as_deref().unwrap_or("?"),
             pkg.dir.to_str().unwrap()
         );
