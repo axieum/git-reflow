@@ -57,7 +57,7 @@ mod tests {
         );
     }
 
-    /// Tests that an unrecognized manifest file produces a detection error.
+    /// Tests that an unrecognised manifest file produces a detection error.
     #[test]
     fn detect_strategy_unknown() {
         let temp_dir = assert_fs::TempDir::new().unwrap();

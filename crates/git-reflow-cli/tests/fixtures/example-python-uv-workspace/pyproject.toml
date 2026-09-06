@@ -1,0 +1,14 @@
+[project]
+name = "example-python-uv-workspace"
+version = "1.0.0"
+description = "An example project."
+authors = [{ name = "Jonathan Hiles", email = "jonathan@hil.es" }]
+readme = "README.md"
+requires-python = ">=3.14"
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13"]
+build-backend = "uv_build"

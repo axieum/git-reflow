@@ -1,0 +1,6 @@
+[package]
+name = "example-rust"
+version = "1.0.0"
+description = "An example project."
+edition = "2024"
+license = "MIT"

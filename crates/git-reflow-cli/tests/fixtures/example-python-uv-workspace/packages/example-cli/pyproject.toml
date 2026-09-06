@@ -1,0 +1,14 @@
+[project]
+name = "example-cli"
+version = "1.0.0"
+description = "An example project."
+dependencies = [
+  "example-api",
+]
+
+[tool.uv.sources]
+example-api = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13"]
+build-backend = "uv_build"

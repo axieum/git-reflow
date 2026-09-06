@@ -1,0 +1,6 @@
+[package]
+name = "example-api"
+version = "1.0.0"
+description = "An example project."
+edition.workspace = true
+license.workspace = true

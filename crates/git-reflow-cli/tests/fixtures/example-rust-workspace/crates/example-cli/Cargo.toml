@@ -1,0 +1,9 @@
+[package]
+name = "example-cli"
+version = "1.0.0"
+description = "An example project."
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+example-api = { path = "../example-api" }

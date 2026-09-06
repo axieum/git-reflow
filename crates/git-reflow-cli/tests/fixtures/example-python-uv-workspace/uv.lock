@@ -1,0 +1,31 @@
+version = 1
+revision = 3
+requires-python = ">=3.14"
+
+[manifest]
+members = [
+    "example-api",
+    "example-cli",
+    "example-python-uv-workspace",
+]
+
+[[package]]
+name = "example-api"
+version = "1.0.0"
+source = { editable = "packages/example-api" }
+
+[[package]]
+name = "example-cli"
+version = "1.0.0"
+source = { editable = "packages/example-cli" }
+dependencies = [
+    { name = "example-api" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "example-api", editable = "packages/example-api" }]
+
+[[package]]
+name = "example-python-uv-workspace"
+version = "1.0.0"
+source = { editable = "." }

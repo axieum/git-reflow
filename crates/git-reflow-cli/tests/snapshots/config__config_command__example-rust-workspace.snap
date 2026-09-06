@@ -1,0 +1,38 @@
+---
+source: crates/git-reflow-cli/tests/config.rs
+expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
+---
+{
+  "packages": [
+    {
+      "dir": ".",
+      "name": "[TEMPDIR]",
+      "strategy": {
+        "rust": {}
+      },
+      "workspace": true,
+      "include-name-in-tag": false,
+      "changelog-path": "CHANGELOG.md"
+    },
+    {
+      "dir": "crates\\example-api",
+      "name": "example-api",
+      "strategy": {
+        "rust": {}
+      },
+      "workspace": true,
+      "include-name-in-tag": true,
+      "changelog-path": "CHANGELOG.md"
+    },
+    {
+      "dir": "crates\\example-cli",
+      "name": "example-cli",
+      "strategy": {
+        "rust": {}
+      },
+      "workspace": true,
+      "include-name-in-tag": true,
+      "changelog-path": "CHANGELOG.md"
+    }
+  ]
+}
