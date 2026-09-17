@@ -1,3 +1,4 @@
+use crate::settings::git::GitConfig;
 use crate::settings::pkg::PackageConfig;
 use crate::strategy::BaseStrategy;
 use anyhow::Context;
@@ -5,12 +6,16 @@ use config::{Config, Environment, File};
 use std::path::PathBuf;
 use tracing::{debug, trace};
 
+pub mod git;
 pub mod pkg;
 
 /// The `git-reflow` configuration.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct AppConfig {
+    /// The Git provider configuration.
+    #[serde(default = "deserialize_empty_struct")]
+    pub git: GitConfig,
     /// A list of package configurations.
     #[serde(default = "default_packages")]
     pub packages: Vec<PackageConfig>,
@@ -22,6 +27,13 @@ fn default_packages() -> Vec<PackageConfig> {
         include_name_in_tag: false, // The root package should not include the name in tag
         ..Default::default()
     }]
+}
+
+/// Deserializes an empty [serde] struct, applying defaults.
+fn deserialize_empty_struct<'de, T: serde::Deserialize<'de>>() -> T {
+    let empty = std::iter::empty::<((), ())>();
+    let de = serde::de::value::MapDeserializer::<_, serde::de::value::Error>::new(empty);
+    T::deserialize(de).unwrap()
 }
 
 impl AppConfig {
@@ -133,6 +145,7 @@ mod tests {
     #[test]
     fn applies_defaults_with_workspace_discovery_enabled() {
         let config = AppConfig {
+            git: GitConfig::default(),
             packages: vec![PackageConfig {
                 dir: PathBuf::from("."),
                 strategy: Some(Strategy::Basic(BasicStrategy::default())),
@@ -153,6 +166,7 @@ mod tests {
     #[test]
     fn skips_workspace_discovery_when_disabled() {
         let config = AppConfig {
+            git: GitConfig::default(),
             packages: vec![PackageConfig {
                 dir: PathBuf::from("."),
                 strategy: Some(Strategy::Basic(BasicStrategy::default())),

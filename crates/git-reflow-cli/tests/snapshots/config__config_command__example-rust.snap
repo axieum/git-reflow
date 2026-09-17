@@ -3,6 +3,13 @@ source: crates/git-reflow-cli/tests/config.rs
 expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
 ---
 {
+  "git": {
+    "git-provider": "github",
+    "git-host": "github.com",
+    "release-branch-prefix": "reflow--branches--",
+    "commit-message-pattern": "chore: release v{{ version }}",
+    "separate-pull-requests": false
+  },
   "packages": [
     {
       "dir": ".",
