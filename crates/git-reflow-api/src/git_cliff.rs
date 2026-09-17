@@ -1,0 +1,468 @@
+use anyhow::{Context, anyhow, bail};
+use semver::Version;
+use serde_json::Value;
+use std::io::Write;
+use std::path::Path;
+use std::process::Command;
+use std::process::{Output, Stdio};
+use std::str;
+use std::str::FromStr;
+use tracing::{debug, trace};
+
+/// Trait to abstract `git-cliff` command execution.
+pub trait CommandRunner {
+    fn run<'a>(&self, args: &'a [&'a str], input: Option<&'a str>) -> anyhow::Result<Output>;
+}
+
+/// The `git-cliff` command executor.
+pub struct GitCliffRunner;
+
+impl CommandRunner for GitCliffRunner {
+    fn run<'a>(&self, args: &'a [&'a str], input: Option<&'a str>) -> anyhow::Result<Output> {
+        let mut child = Command::new("git-cliff")
+            .args(args)
+            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("failed to spawn `git-cliff` process")?;
+
+        if let Some(data) = input {
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(data.as_bytes())
+                    .context("failed to write JSON context to `git-cliff` stdin")?;
+            }
+        }
+
+        Ok(child
+            .wait_with_output()
+            .context("failed to wait for `git-cliff` process")?)
+    }
+}
+
+/// Spawns a [`git-cliff`](https://github.com/orhun/git-cliff) process in a given directory and
+/// returns the context as a parsed JSON object.
+///
+/// > `git-cliff --include-path ${dir}/**/* --unreleased --bump --context`
+///
+/// # Arguments
+/// * `dir` - The path to scope the commits to.
+/// * `runner` - The `git-cliff` command runner.
+///
+/// # Returns
+/// A result containing the parsed `git-cliff` output context for unreleased changes.
+pub fn run_git_cliff(dir: &Path, runner: Option<&dyn CommandRunner>) -> anyhow::Result<Option<Value>> {
+    // Prepare `git-cliff` arguments.
+    let include_path = match dir.to_str() {
+        Some(".") => Path::new("**").join("*"), // git-cliff would reject `./**/*`
+        _ => dir.join("**").join("*"),
+    };
+    let args = [
+        "--include-path",
+        &include_path.to_string_lossy(),
+        "--unreleased",
+        "--bump",
+        "--context",
+    ];
+    debug!("$ git-cliff {}", &args.join(" "));
+
+    // Invoke the `git-cliff` command.
+    let runner = runner.unwrap_or(&GitCliffRunner);
+    let output = runner.run(&args, None)?;
+
+    // Check the `git-cliff` output.
+    if output.status.success() {
+        let json_str = str::from_utf8(&output.stdout)?;
+        match serde_json::from_str::<Value>(json_str) {
+            Ok(context) => {
+                if let Some(object) = context.as_array().and_then(|a| a.get(0)) {
+                    trace!("↳ {}", serde_json::to_string_pretty(object)?);
+                    return Ok(Some(object.clone()));
+                }
+                Ok(None)
+            }
+            Err(err) => bail!("failed to parse git-cliff JSON output: {}", err),
+        }
+    } else {
+        bail!("git-cliff error: {}", str::from_utf8(&output.stderr)?)
+    }
+}
+
+/// Spawns a [`git-cliff`](https://github.com/orhun/git-cliff) process in a given directory and
+/// applies the given context.
+///
+/// > `git-cliff --workdir ${dir} --from-context - << ${context}`
+///
+/// # Arguments
+/// * `path` - The path to write the changelog to.
+/// * `context` - The `git-cliff` context data.
+/// * `runner` - The `git-cliff` command runner.
+pub fn apply_git_cliff_context(path: &Path, context: &Value, runner: Option<&dyn CommandRunner>) -> anyhow::Result<()> {
+    // Prepare `git-cliff` arguments.
+    let context_json = serde_json::to_string(&[context]).context("failed to serialize context")?;
+    let args = ["--from-context", "-", "--output", &path.to_string_lossy()];
+
+    // Invoke the `git-cliff` command.
+    debug!("$ git-cliff --from-context - --output {}", path.display());
+    let runner = runner.unwrap_or(&GitCliffRunner);
+    let output = runner.run(&args, Some(&context_json))?;
+
+    // Check the `git-cliff` output.
+    if output.status.success() {
+        Ok(())
+    } else {
+        bail!("git-cliff error: {}", str::from_utf8(&output.stderr)?)
+    }
+}
+
+/// Spawns a [`git-cliff`](https://github.com/orhun/git-cliff) process and renders the markdown
+/// changelog for the given context to a string.
+///
+/// > `git-cliff --from-context - --output -`
+///
+/// # Arguments
+/// * `context` - The `git-cliff` context data.
+/// * `runner` - The `git-cliff` command runner.
+pub fn render_changelog_markdown(context: &Value, runner: Option<&dyn CommandRunner>) -> anyhow::Result<String> {
+    let context_json = serde_json::to_string(&[context]).context("failed to serialize context")?;
+    let args = ["--from-context", "-", "--output", "-"];
+
+    debug!("$ git-cliff --from-context - --output -");
+    let runner = runner.unwrap_or(&GitCliffRunner);
+    let output = runner.run(&args, Some(&context_json))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8(output.stdout)
+            .context("git-cliff output was not valid UTF-8")?
+            .trim()
+            .to_string())
+    } else {
+        bail!("git-cliff error: {}", str::from_utf8(&output.stderr)?)
+    }
+}
+
+/// Returns the parsed [Semantic Version](https://semver.org/) from the `git-cliff` context.
+///
+/// # Arguments
+/// * `context` - The `git-cliff` context data.
+///
+/// # Returns
+/// A result containing the parsed [Semantic Version](https://semver.org/).
+pub fn get_version_from_git_cliff_context(context: &Value) -> anyhow::Result<Version> {
+    context
+        .get("version")
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim_start_matches('v'))
+        .ok_or_else(|| anyhow!("missing version in git-cliff context"))
+        .and_then(|v| {
+            Version::from_str(v).map_err(|err| anyhow!("invalid semver version in git-cliff context: {}", err))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockall::mock;
+    use std::os::windows::process::ExitStatusExt;
+
+    mock! {
+        /// The mock `git-cliff` command executor.
+        pub MockGitCliffRunner {}
+
+        impl CommandRunner for MockGitCliffRunner {
+            fn run<'a>(&self, args: &'a [&'a str], input: Option<&'a str>) -> anyhow::Result<Output>;
+        }
+    }
+
+    /// Tests that the JSON context from running `git-cliff` is parsed and returned.
+    #[test]
+    fn run_git_cliff_with_success() {
+        let include_dir = Path::new("crates").join("pkg-a");
+        let include_glob = include_dir.join("**").join("*");
+
+        let mut runner = MockMockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, _| {
+                args == [
+                    "--include-path",
+                    &include_glob.to_string_lossy(),
+                    "--unreleased",
+                    "--bump",
+                    "--context",
+                ]
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0), // success
+                    stdout: r#"[{"version": "1.0.0"}]"#.as_bytes().to_vec(),
+                    stderr: vec![],
+                })
+            });
+
+        let result = run_git_cliff(&include_dir, Some(&runner));
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.0.0"}));
+    }
+
+    /// Tests that an empty JSON context from running `git-cliff` is handled gracefully.
+    #[test]
+    fn run_git_cliff_with_empty_context() {
+        let include_dir = Path::new("crates").join("pkg-a");
+        let include_glob = include_dir.join("**").join("*");
+
+        let mut runner = MockMockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, _| {
+                args == [
+                    "--include-path",
+                    &include_glob.to_string_lossy(),
+                    "--unreleased",
+                    "--bump",
+                    "--context",
+                ]
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0), // success
+                    stdout: r#"[]"#.as_bytes().to_vec(),
+                    stderr: vec![],
+                })
+            });
+
+        let result = run_git_cliff(&include_dir, Some(&runner));
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    /// Tests that a non-zero exit code from `git-cliff` is handled gracefully.
+    #[test]
+    fn run_git_cliff_with_erroneous_exit_code() {
+        let include_dir = Path::new("crates").join("pkg-b");
+        let include_glob = include_dir.join("**").join("*");
+
+        let mut runner = MockMockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, _| {
+                args == [
+                    "--include-path",
+                    &include_glob.to_string_lossy(),
+                    "--unreleased",
+                    "--bump",
+                    "--context",
+                ]
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(1), // failure
+                    stdout: vec![],
+                    stderr: "something went wrong".as_bytes().to_vec(),
+                })
+            });
+
+        let result = run_git_cliff(&include_dir, Some(&runner));
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "git-cliff error: something went wrong");
+    }
+
+    /// Tests that unknown `git-cliff` JSON context output is handled gracefully.
+    #[test]
+    fn run_git_cliff_with_unknown_json_output() {
+        let include_dir = Path::new("crates").join("pkg-c");
+        let include_glob = include_dir.join("**").join("*");
+
+        let mut runner = MockMockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, _| {
+                args == [
+                    "--include-path",
+                    &include_glob.to_string_lossy(),
+                    "--unreleased",
+                    "--bump",
+                    "--context",
+                ]
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0), // success
+                    stdout: r#"{"not": "array"}"#.as_bytes().to_vec(),
+                    stderr: vec![],
+                })
+            });
+
+        let result = run_git_cliff(&include_dir, Some(&runner));
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    /// Tests that malformed `git-cliff` JSON context output is handled gracefully.
+    #[test]
+    fn run_git_cliff_with_malformed_json_output() {
+        let include_dir = Path::new("crates").join("pkg-c");
+        let include_glob = include_dir.join("**").join("*");
+
+        let mut runner = MockMockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, _| {
+                args == [
+                    "--include-path",
+                    &include_glob.to_string_lossy(),
+                    "--unreleased",
+                    "--bump",
+                    "--context",
+                ]
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0), // success
+                    stdout: "invalid json".as_bytes().to_vec(),
+                    stderr: vec![],
+                })
+            });
+
+        let result = run_git_cliff(&include_dir, Some(&runner));
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "failed to parse git-cliff JSON output: expected value at line 1 column 1"
+        );
+    }
+
+    /// Tests that running `git-cliff` with current dir (i.e. `.`) trims leading `./` edge-case.
+    #[test]
+    fn run_git_cliff_with_current_dir() {
+        let include_dir = Path::new(".");
+        let include_glob = Path::new("**").join("*"); // no leading `./`
+
+        let mut runner = MockMockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, _| {
+                args == [
+                    "--include-path",
+                    &include_glob.to_string_lossy(), // should be `**/*` instead of `./**/*`
+                    "--unreleased",
+                    "--bump",
+                    "--context",
+                ]
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0), // success
+                    stdout: r#"[{"version": "1.0.0"}]"#.as_bytes().to_vec(),
+                    stderr: vec![],
+                })
+            });
+
+        let result = run_git_cliff(&include_dir, Some(&runner));
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.0.0"}));
+    }
+
+    /// Tests that the JSON context is applied by `git-cliff --from-context -`.
+    #[test]
+    fn apply_git_cliff_context_with_success() {
+        let changelog_path = Path::new("crates").join("pkg-a").join("CHANGELOG.md");
+        let changelog_path_str = changelog_path.to_string_lossy().to_string();
+        let context = serde_json::json!({"version": "1.0.0"});
+
+        let mut runner = MockMockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, input| {
+                args == ["--from-context", "-", "--output", &changelog_path_str]
+                    && input.as_deref() == Some(r#"[{"version":"1.0.0"}]"#)
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0), // success
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
+
+        let result = apply_git_cliff_context(&changelog_path, &context, Some(&runner));
+
+        assert!(result.is_ok());
+    }
+
+    /// Tests that a non-zero exit code from `git-cliff --from-context -` is handled gracefully.
+    #[test]
+    fn apply_git_cliff_context_with_erroneous_exit_code() {
+        let changelog_path = Path::new("crates").join("pkg-a").join("CHANGELOG.md");
+        let changelog_path_str = changelog_path.to_string_lossy().to_string();
+        let context = serde_json::json!({"version": "1.0.0"});
+
+        let mut runner = MockMockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, input| {
+                args == ["--from-context", "-", "--output", &changelog_path_str]
+                    && input.as_deref() == Some(r#"[{"version":"1.0.0"}]"#)
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(1), // failure
+                    stdout: vec![],
+                    stderr: "something went wrong".as_bytes().to_vec(),
+                })
+            });
+
+        let result = apply_git_cliff_context(&changelog_path, &context, Some(&runner));
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "git-cliff error: something went wrong");
+    }
+
+    /// Tests that a valid semantic version is returned from the `git-cliff` JSON context.
+    #[test]
+    fn get_version_from_git_cliff_context_with_valid_version() {
+        let context = serde_json::json!({"version": "1.0.1"});
+        let result = get_version_from_git_cliff_context(&context);
+
+        assert_eq!(result.unwrap(), Version::new(1, 0, 1));
+    }
+
+    /// Tests that a valid prefixed semantic version is returned from the `git-cliff` JSON context.
+    #[test]
+    fn get_version_from_git_cliff_context_with_valid_v_prefixed_version() {
+        let context = serde_json::json!({"version": "v1.1.0"});
+        let result = get_version_from_git_cliff_context(&context);
+
+        assert_eq!(result.unwrap(), Version::new(1, 1, 0));
+    }
+
+    /// Tests that a valid semantic version is returned from the `git-cliff` JSON context.
+    #[test]
+    fn get_version_from_git_cliff_context_with_invalid_version() {
+        let context = serde_json::json!({"version": "invalid version"});
+        let result = get_version_from_git_cliff_context(&context);
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "invalid semver version in git-cliff context: unexpected character 'i' while parsing major version number"
+        );
+    }
+
+    /// Tests that a valid semantic version is returned from the `git-cliff` JSON context.
+    #[test]
+    fn get_version_from_git_cliff_context_with_missing_version() {
+        let context = serde_json::json!({"dummy": "text"});
+        let result = get_version_from_git_cliff_context(&context);
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "missing version in git-cliff context");
+    }
+}
