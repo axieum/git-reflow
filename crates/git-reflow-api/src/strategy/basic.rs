@@ -68,11 +68,7 @@ mod tests {
     #[case::multi_level("crates/git-reflow-api", Ok("git-reflow-api"))]
     #[case::relative_path("./magic", Ok("magic"))]
     #[case::root_dir("/", Err("no valid directory name found"))]
-    fn suggest_name_for_dir(
-        strategy: BasicStrategy,
-        #[case] filename: &str,
-        #[case] expected: Result<&str, &str>,
-    ) {
+    fn suggest_name_for_dir(strategy: BasicStrategy, #[case] filename: &str, #[case] expected: Result<&str, &str>) {
         let result = strategy.suggest_name(Path::new(filename));
         match (result, expected) {
             (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),

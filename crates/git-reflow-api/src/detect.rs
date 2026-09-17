@@ -49,12 +49,7 @@ mod tests {
         temp_dir.child(filename).touch().unwrap();
 
         let strategy = detect_strategy(&temp_dir);
-        assert_eq!(
-            strategy.unwrap(),
-            expected,
-            "expected `{}` strategy",
-            expected
-        );
+        assert_eq!(strategy.unwrap(), expected, "expected `{}` strategy", expected);
     }
 
     /// Tests that an unrecognised manifest file produces a detection error.

@@ -182,10 +182,7 @@ mod tests {
     /// Tests that a default strategy is returned.
     #[rstest]
     fn default_strategy() {
-        assert_eq!(
-            Strategy::default(),
-            Strategy::Basic(BasicStrategy::default())
-        );
+        assert_eq!(Strategy::default(), Strategy::Basic(BasicStrategy::default()));
     }
 
     /// Tests that the various strategy defaults can be resolved by their name.
@@ -212,10 +209,7 @@ mod tests {
         let json = "\"basic\"";
         let deserializer = &mut serde_json::Deserializer::from_str(json);
         let result: Result<Option<Strategy>, _> = string_or_struct(deserializer);
-        assert_eq!(
-            result.unwrap(),
-            Some(Strategy::Basic(BasicStrategy::default()))
-        );
+        assert_eq!(result.unwrap(), Some(Strategy::Basic(BasicStrategy::default())));
     }
 
     /// Tests that an unknown name is not deserialized to a strategy.
@@ -248,10 +242,7 @@ mod tests {
         let json = "{ \"basic\": {} }";
         let deserializer = &mut serde_json::Deserializer::from_str(json);
         let result: Result<Option<Strategy>, _> = string_or_struct(deserializer);
-        assert_eq!(
-            result.unwrap(),
-            Some(Strategy::Basic(BasicStrategy::default()))
-        );
+        assert_eq!(result.unwrap(), Some(Strategy::Basic(BasicStrategy::default())));
     }
 
     /// Tests that a malformed struct is not deserialized to a strategy.

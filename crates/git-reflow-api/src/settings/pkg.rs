@@ -76,7 +76,8 @@ impl PackageConfig {
     pub fn apply_defaults(mut self) -> anyhow::Result<Self> {
         // If the strategy is not specified, attempt to detect it based on files present.
         if self.strategy.is_none() {
-            self.strategy = detect_strategy(&self.dir).map(Some).context(r#"To resolve this issue:
+            self.strategy = detect_strategy(&self.dir).map(Some).context(
+                r#"To resolve this issue:
   ├ Verify you provided the correct `packages[].dir` path in your configuration;
   ├ Ensure the directory contains a supported configuration file, e.g. `pyproject.toml` or `package.json`;
   ⌊ Otherwise, manually set the release strategy via `packages[].strategy` in your configuration.
@@ -92,18 +93,15 @@ For further assistance, run `git reflow --help` or visit https://github.com/axie
 
         // If the package name is not specified, attempt to extract it from the strategy's files.
         if self.name.is_none() {
-            self.name = self.strategy().suggest_name(&self.dir).map(Some).context(r#"To resolve this issue:
+            self.name = self.strategy().suggest_name(&self.dir).map(Some).context(
+                r#"To resolve this issue:
   ├ Verify you provided the correct `packages[].dir` path in your configuration;
   ├ Ensure the directory contains a supported configuration file, e.g. `pyproject.toml` or `package.json`;
   ⌊ Otherwise, manually set the package name via `packages[].name` in your configuration.
 
 For further assistance, run `git reflow --help` or visit https://github.com/axieum/git-reflow."#,
             )?;
-            trace!(
-                "detected package name `{}` in `{}`",
-                self.name(),
-                self.dir.display()
-            );
+            trace!("detected package name `{}` in `{}`", self.name(), self.dir.display());
         }
 
         Ok(self)
@@ -125,10 +123,7 @@ mod tests {
         assert_eq!(config.strategy, None);
         assert!(config.workspace);
         assert!(config.include_name_in_tag);
-        assert_eq!(
-            config.changelog_path(),
-            PathBuf::from(".").join("CHANGELOG.md")
-        );
+        assert_eq!(config.changelog_path(), PathBuf::from(".").join("CHANGELOG.md"));
     }
 
     /// Tests that explicit package config values are deserialised and retained when defaults are applied.
@@ -149,10 +144,7 @@ mod tests {
 
         assert_eq!(config.dir, PathBuf::from("packages/api"));
         assert_eq!(config.name(), "api");
-        assert_eq!(
-            config.strategy(),
-            &Strategy::Basic(BasicStrategy::default())
-        );
+        assert_eq!(config.strategy(), &Strategy::Basic(BasicStrategy::default()));
         assert!(!config.workspace);
         assert!(!config.include_name_in_tag);
         assert_eq!(

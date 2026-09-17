@@ -58,9 +58,7 @@ pub fn project_dir(#[default(".")] name: &str) -> TempDir {
     // Copy the test project fixture source into a temporary directory.
     // This ensures that tests can modify the project without affecting the test source code.
     let temp_dir = TempDir::new().unwrap();
-    temp_dir
-        .copy_from(&fixture_path, &["**/*", "!*.export"])
-        .unwrap();
+    temp_dir.copy_from(&fixture_path, &["**/*", "!*.export"]).unwrap();
 
     temp_dir
 }

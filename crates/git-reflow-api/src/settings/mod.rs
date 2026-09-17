@@ -104,9 +104,7 @@ pub fn load(config_path: Option<PathBuf>) -> anyhow::Result<AppConfig> {
 
     // Load the configuration and deserialise it.
     let config = builder.build().context("failed to build config")?;
-    let result: AppConfig = config
-        .try_deserialize()
-        .context("failed to deserialise config")?;
+    let result: AppConfig = config.try_deserialize().context("failed to deserialise config")?;
 
     // Apply defaults to the configuration.
     let result = result.apply_defaults()?;
@@ -147,12 +145,7 @@ mod tests {
         assert_eq!(config.packages.len(), 1);
         assert_eq!(
             config.packages[0].name(),
-            std::env::current_dir()
-                .unwrap()
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
+            std::env::current_dir().unwrap().file_name().unwrap().to_str().unwrap()
         );
     }
 

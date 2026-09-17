@@ -41,10 +41,7 @@ impl BaseStrategy for PythonStrategy {
         if setup_py.try_exists()? {
             return Self::write_version_to_setup_py(&setup_py, new_version);
         } else {
-            debug!(
-                "a `setup.py` file was not found at `{}`, skipping",
-                setup_py.display()
-            );
+            debug!("a `setup.py` file was not found at `{}`, skipping", setup_py.display());
         }
 
         Ok(())
@@ -101,10 +98,10 @@ impl BaseStrategy for PythonStrategy {
         if !filename.is_file() {
             return Ok(vec![]);
         }
-        let contents = fs::read_to_string(filename)
-            .map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
-        let data: Value = toml::from_str(&contents)
-            .map_err(|err| anyhow!("could not parse `{}`: {err}", filename.display()))?;
+        let contents =
+            fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
+        let data: Value =
+            toml::from_str(&contents).map_err(|err| anyhow!("could not parse `{}`: {err}", filename.display()))?;
 
         // Try `uv` workspace
         if let Some(workspace) = data
@@ -135,12 +132,9 @@ impl PythonStrategy {
     ///
     /// # Returns
     /// A result of whether the update was successful.
-    fn write_version_to_pyproject_toml(
-        filename: &Path,
-        new_version: &Version,
-    ) -> anyhow::Result<()> {
-        let contents = fs::read_to_string(filename)
-            .map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
+    fn write_version_to_pyproject_toml(filename: &Path, new_version: &Version) -> anyhow::Result<()> {
+        let contents =
+            fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
         let mut data = contents
             .parse::<DocumentMut>()
             .map_err(|err| anyhow!("could not parse `{}`: {err}", filename.display()))?;
@@ -148,16 +142,9 @@ impl PythonStrategy {
         // `project.version`
         if let Some(project) = data["project"].as_table_mut() {
             project["version"] = toml_edit::value(new_version.to_string());
-            fs::write(filename, data.to_string()).map_err(|err| {
-                anyhow!(
-                    "failed to write `[project.version]` to `{}`: {err}",
-                    filename.display()
-                )
-            })?;
-            debug!(
-                "set `[project.version]` to `{new_version}` at `{}`",
-                filename.display()
-            );
+            fs::write(filename, data.to_string())
+                .map_err(|err| anyhow!("failed to write `[project.version]` to `{}`: {err}", filename.display()))?;
+            debug!("set `[project.version]` to `{new_version}` at `{}`", filename.display());
             return Ok(());
         }
 
@@ -195,8 +182,8 @@ impl PythonStrategy {
     /// # Returns
     /// A result of whether the update was successful.
     fn write_version_to_setup_py(filename: &Path, new_version: &Version) -> anyhow::Result<()> {
-        let contents = fs::read_to_string(filename)
-            .map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
+        let contents =
+            fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
 
         let re = Regex::new(r#"(version(?:\s*|:\s?[^'"]+)?=\s*['"])(.+?)(['"](,|\r|\n|$))"#)?;
         let new_contents = re.replace(&contents, |caps: &regex::Captures| {
@@ -205,12 +192,8 @@ impl PythonStrategy {
 
         // Check if the contents were actually modified, i.e. got a new `&str` reference
         if let Cow::Owned(new_contents) = new_contents {
-            fs::write(filename, new_contents).map_err(|err| {
-                anyhow!(
-                    "failed to write `version` to `{}`: {err}",
-                    filename.display()
-                )
-            })?;
+            fs::write(filename, new_contents)
+                .map_err(|err| anyhow!("failed to write `version` to `{}`: {err}", filename.display()))?;
             return Ok(());
         }
 
@@ -226,10 +209,7 @@ impl PythonStrategy {
     ///
     /// # Returns
     /// The package configurations of each Python workspace member if any.
-    fn suggest_packages_from_uv_workspace(
-        dir: &Path,
-        workspace: &Value,
-    ) -> anyhow::Result<Vec<PackageConfig>> {
+    fn suggest_packages_from_uv_workspace(dir: &Path, workspace: &Value) -> anyhow::Result<Vec<PackageConfig>> {
         let members = workspace
             .get("members")
             .and_then(|members| members.as_array())
@@ -294,17 +274,12 @@ impl PythonStrategy {
     ///
     /// The package name if successfully extracted.
     fn suggest_name_from_pyproject_toml(path: &Path) -> anyhow::Result<Option<String>> {
-        let content = fs::read_to_string(path)
-            .map_err(|err| anyhow!("could not read `{}`: {err}", path.display()))?;
-        let data: Value = toml::from_str(&content)
-            .map_err(|err| anyhow!("could not parse `{}`: {err}", path.display()))?;
+        let content = fs::read_to_string(path).map_err(|err| anyhow!("could not read `{}`: {err}", path.display()))?;
+        let data: Value =
+            toml::from_str(&content).map_err(|err| anyhow!("could not parse `{}`: {err}", path.display()))?;
 
         // `project.name`
-        if let Some(name) = data
-            .get("project")
-            .and_then(|p| p.get("name"))
-            .and_then(|n| n.as_str())
-        {
+        if let Some(name) = data.get("project").and_then(|p| p.get("name")).and_then(|n| n.as_str()) {
             return Ok(Some(name.to_string()));
         }
 
@@ -331,8 +306,7 @@ impl PythonStrategy {
     ///
     /// The package name if successfully extracted.
     fn suggest_name_from_setup_py(path: &Path) -> anyhow::Result<Option<String>> {
-        let content = fs::read_to_string(path)
-            .map_err(|err| anyhow!("could not read `{}`: {err}", path.display()))?;
+        let content = fs::read_to_string(path).map_err(|err| anyhow!("could not read `{}`: {err}", path.display()))?;
         let re = Regex::new(r#"name(?:\s*|:\s?[^'"]+)?=\s*['"](.+?)['"](,|\r|\n|$)"#)?;
         if let Some(captures) = re.captures(&content) {
             return Ok(Some(captures[1].to_string()));
@@ -370,10 +344,7 @@ mod tests {
     #[rstest]
     fn suggest_name_for_dir_with_setup_py_file(strategy: PythonStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
-        temp_dir
-            .child("setup.py")
-            .write_str("name = \"machine\"")
-            .unwrap();
+        temp_dir.child("setup.py").write_str("name = \"machine\"").unwrap();
         temp_dir.child("version.txt").write_str("1.0.0").unwrap(); // red-herring
 
         assert_eq!(strategy.suggest_name(&temp_dir).unwrap(), "machine");
@@ -383,10 +354,7 @@ mod tests {
     #[rstest]
     fn suggest_name_for_dir_with_multiple_files(strategy: PythonStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
-        temp_dir
-            .child("setup.py")
-            .write_str("name = \"foo\"")
-            .unwrap();
+        temp_dir.child("setup.py").write_str("name = \"foo\"").unwrap();
         temp_dir
             .child("pyproject.toml")
             .write_str("[project]\nname = \"bar\"")
@@ -415,14 +383,8 @@ mod tests {
     #[rstest]
     fn suggest_name_for_dir_fallthrough(strategy: PythonStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
-        temp_dir
-            .child("pyproject.toml")
-            .write_str("[invalid.toml]")
-            .unwrap();
-        temp_dir
-            .child("setup.py")
-            .write_str("name = \"bar\"")
-            .unwrap();
+        temp_dir.child("pyproject.toml").write_str("[invalid.toml]").unwrap();
+        temp_dir.child("setup.py").write_str("name = \"bar\"").unwrap();
 
         assert_eq!(strategy.suggest_name(&temp_dir).unwrap(), "bar");
     }
@@ -432,10 +394,7 @@ mod tests {
     #[rstest]
     fn suggest_name_for_dir_fallthrough_all(strategy: PythonStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
-        temp_dir
-            .child("pyproject.toml")
-            .write_str("[invalid.toml]")
-            .unwrap();
+        temp_dir.child("pyproject.toml").write_str("[invalid.toml]").unwrap();
         temp_dir.child("setup.py").write_str("# no name").unwrap();
 
         assert_eq!(
@@ -450,9 +409,7 @@ mod tests {
     fn suggest_name_from_pyproject_toml_file_with_project_section() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let pyproject_toml = temp_dir.child("pyproject.toml");
-        pyproject_toml
-            .write_str("[project]\nname = \"magic\"")
-            .unwrap();
+        pyproject_toml.write_str("[project]\nname = \"magic\"").unwrap();
 
         let result = PythonStrategy::suggest_name_from_pyproject_toml(&pyproject_toml).unwrap();
         assert_eq!(result.unwrap(), "magic");
@@ -464,9 +421,7 @@ mod tests {
     fn suggest_name_from_pyproject_toml_file_with_poetry_section() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let pyproject_toml = temp_dir.child("pyproject.toml");
-        pyproject_toml
-            .write_str("[tool.poetry]\nname = \"magic\"")
-            .unwrap();
+        pyproject_toml.write_str("[tool.poetry]\nname = \"magic\"").unwrap();
 
         let result = PythonStrategy::suggest_name_from_pyproject_toml(&pyproject_toml).unwrap();
         assert_eq!(result.unwrap(), "magic");
@@ -478,9 +433,7 @@ mod tests {
     fn suggest_name_from_pyproject_toml_file_with_unknown_structure() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let pyproject_toml = temp_dir.child("pyproject.toml");
-        pyproject_toml
-            .write_str("[something]\nname = \"magic\"")
-            .unwrap();
+        pyproject_toml.write_str("[something]\nname = \"magic\"").unwrap();
 
         let result = PythonStrategy::suggest_name_from_pyproject_toml(&pyproject_toml).unwrap();
         assert!(result.is_none(), "expected no package name");
@@ -569,7 +522,9 @@ setup()"#,
         pkg_d.create_dir_all().unwrap();
         pkg_e.create_dir_all().unwrap();
 
-        let root_toml: Value = toml::from_str("[tool.uv.workspace]\nmembers = [\"packages/*\", \"other/*\"]\nexclude = [\"packages/c\"]").unwrap();
+        let root_toml: Value =
+            toml::from_str("[tool.uv.workspace]\nmembers = [\"packages/*\", \"other/*\"]\nexclude = [\"packages/c\"]")
+                .unwrap();
         let workspace = root_toml
             .get("tool")
             .and_then(|t| t.get("uv"))
@@ -596,13 +551,9 @@ setup()"#,
             .child("pyproject.toml")
             .write_str("[project]\nname = \"d\"")
             .unwrap();
-        pkg_e
-            .child("README.md")
-            .write_str("not a Python package")
-            .unwrap();
+        pkg_e.child("README.md").write_str("not a Python package").unwrap();
 
-        let packages =
-            PythonStrategy::suggest_packages_from_uv_workspace(&temp_dir, &workspace).unwrap();
+        let packages = PythonStrategy::suggest_packages_from_uv_workspace(&temp_dir, &workspace).unwrap();
         assert_eq!(packages.len(), 3);
         assert_eq!(packages[0].dir, pkg_a.path());
         assert_eq!(packages[1].dir, pkg_b.path());
@@ -614,12 +565,11 @@ setup()"#,
     fn write_version_to_pyproject_toml() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let pyproject_toml = temp_dir.child("pyproject.toml");
-        pyproject_toml.write_str("[project]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n").unwrap();
+        pyproject_toml
+            .write_str("[project]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n")
+            .unwrap();
 
-        let result = PythonStrategy::write_version_to_pyproject_toml(
-            &pyproject_toml,
-            &Version::new(1, 1, 0),
-        );
+        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0));
         assert!(result.is_ok());
         pyproject_toml.assert("[project]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.1.0\"\n");
     }
@@ -629,14 +579,14 @@ setup()"#,
     fn write_version_to_pyproject_toml_with_poetry() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let pyproject_toml = temp_dir.child("pyproject.toml");
-        pyproject_toml.write_str("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n").unwrap();
+        pyproject_toml
+            .write_str("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n")
+            .unwrap();
 
-        let result = PythonStrategy::write_version_to_pyproject_toml(
-            &pyproject_toml,
-            &Version::new(1, 1, 0),
-        );
+        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0));
         assert!(result.is_ok());
-        pyproject_toml.assert("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.1.0\"\n");
+        pyproject_toml
+            .assert("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.1.0\"\n");
     }
 
     /// Tests that a new version cannot be written to a `pyproject.toml` file with an unknown structure.
@@ -648,10 +598,7 @@ setup()"#,
             .write_str("[something]\nname = \"magic\"\n# no version\n")
             .unwrap();
 
-        let result = PythonStrategy::write_version_to_pyproject_toml(
-            &pyproject_toml,
-            &Version::new(1, 1, 0),
-        );
+        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0));
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
