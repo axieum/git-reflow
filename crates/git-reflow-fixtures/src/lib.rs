@@ -29,10 +29,7 @@ pub const INSTA_STDOUT_FILTERS: [(&str, &str); 3] = [
 #[fixture]
 pub fn project_path(#[default(".")] name: &str) -> PathBuf {
     // Locate the test project fixture source.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures").join(name)
 }
 
 /// Returns a temporary folder with a copy of a test project fixture.
@@ -41,7 +38,7 @@ pub fn project_path(#[default(".")] name: &str) -> PathBuf {
 ///
 /// # Arguments
 ///
-/// * `name` - The name of the project directory in `tests/fixtures`.
+/// * `name` - The name of the project directory in `fixtures`.
 ///
 /// # Returns
 ///
@@ -68,7 +65,7 @@ pub fn project_dir(#[default(".")] name: &str) -> TempDir {
 ///
 /// # Arguments
 ///
-/// * `name` - The name of the project directory in `tests/fixtures`.
+/// * `name` - The name of the project directory in `fixtures`.
 ///
 /// # Returns
 ///

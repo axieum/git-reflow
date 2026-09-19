@@ -1,8 +1,6 @@
-use crate::common::{INSTA_STDOUT_FILTERS, project_repo};
 use assert_cmd::Command;
+use git_reflow_fixtures::{INSTA_STDOUT_FILTERS, project_repo};
 use rstest::*;
-
-mod common;
 
 /// Tests that the `config` command produces the expected output for various project fixtures.
 #[rstest]
