@@ -6,6 +6,7 @@ use serde_json::Value;
 use tracing::debug;
 
 /// A planned package release.
+#[allow(unused)]
 pub struct PackageRelease<'pkg> {
     /// The package configuration.
     pkg: &'pkg PackageConfig,

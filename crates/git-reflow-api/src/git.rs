@@ -87,16 +87,15 @@ pub fn commit(repo: &Repository, pathspecs: &[&str], message: &str) -> anyhow::R
     // Commit the changes to the repository and return.
     let tree_oid = index.write_tree().context("could not stage changes")?;
     let signature = repo.signature()?;
-    Ok(repo
-        .commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            &message,
-            &repo.find_tree(tree_oid)?,
-            &parents,
-        )
-        .context("could not commit changes")?)
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        message,
+        &repo.find_tree(tree_oid)?,
+        &parents,
+    )
+    .context("could not commit changes")
 }
 
 /// A guard that ensures the Git repository is restored to its original state

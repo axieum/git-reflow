@@ -27,17 +27,17 @@ impl CommandRunner for GitCliffRunner {
             .spawn()
             .context("failed to spawn `git-cliff` process")?;
 
-        if let Some(data) = input {
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(data.as_bytes())
-                    .context("failed to write JSON context to `git-cliff` stdin")?;
-            }
+        if let Some(data) = input
+            && let Some(mut stdin) = child.stdin.take()
+        {
+            stdin
+                .write_all(data.as_bytes())
+                .context("failed to write JSON context to `git-cliff` stdin")?;
         }
 
-        Ok(child
+        child
             .wait_with_output()
-            .context("failed to wait for `git-cliff` process")?)
+            .context("failed to wait for `git-cliff` process")
     }
 }
 
@@ -76,7 +76,7 @@ pub fn run_git_cliff(dir: &Path, runner: Option<&dyn CommandRunner>) -> anyhow::
         let json_str = str::from_utf8(&output.stdout)?;
         match serde_json::from_str::<Value>(json_str) {
             Ok(context) => {
-                if let Some(object) = context.as_array().and_then(|a| a.get(0)) {
+                if let Some(object) = context.as_array().and_then(|a| a.first()) {
                     trace!("↳ {}", serde_json::to_string_pretty(object)?);
                     return Ok(Some(object.clone()));
                 }

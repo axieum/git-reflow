@@ -28,7 +28,7 @@ impl BaseStrategy for PythonStrategy {
         // Update the `pyproject.toml` file
         let pyproject = &config.dir.join("pyproject.toml");
         if pyproject.try_exists()? {
-            return Self::write_version_to_pyproject_toml(&pyproject, &new_version);
+            return Self::write_version_to_pyproject_toml(pyproject, new_version);
         } else {
             debug!(
                 "a `pyproject.toml` file was not found at `{}`, skipping",
@@ -39,7 +39,7 @@ impl BaseStrategy for PythonStrategy {
         // Update the `setup.py` file
         let setup_py = &config.dir.join("setup.py");
         if setup_py.try_exists()? {
-            return Self::write_version_to_setup_py(&setup_py, new_version);
+            return Self::write_version_to_setup_py(setup_py, new_version);
         } else {
             debug!("a `setup.py` file was not found at `{}`, skipping", setup_py.display());
         }
@@ -68,18 +68,18 @@ impl BaseStrategy for PythonStrategy {
     fn suggest_name(&self, dir: &Path) -> anyhow::Result<String> {
         // Try `pyproject.toml`
         let pyproject = &dir.join("pyproject.toml");
-        if pyproject.try_exists()? {
-            if let Some(name) = Self::suggest_name_from_pyproject_toml(pyproject)? {
-                return Ok(name);
-            }
+        if pyproject.try_exists()?
+            && let Some(name) = Self::suggest_name_from_pyproject_toml(pyproject)?
+        {
+            return Ok(name);
         }
 
         // Try `setup.py`
         let setup_py = &dir.join("setup.py");
-        if setup_py.try_exists()? {
-            if let Some(name) = Self::suggest_name_from_setup_py(setup_py)? {
-                return Ok(name);
-            }
+        if setup_py.try_exists()?
+            && let Some(name) = Self::suggest_name_from_setup_py(setup_py)?
+        {
+            return Ok(name);
         }
 
         // Unsupported file
@@ -187,7 +187,7 @@ impl PythonStrategy {
 
         let re = Regex::new(r#"(version(?:\s*|:\s?[^'"]+)?=\s*['"])(.+?)(['"](,|\r|\n|$))"#)?;
         let new_contents = re.replace(&contents, |caps: &regex::Captures| {
-            format!("{}{}{}", &caps[1], new_version.to_string(), &caps[3])
+            format!("{}{}{}", &caps[1], new_version, &caps[3])
         });
 
         // Check if the contents were actually modified, i.e. got a new `&str` reference

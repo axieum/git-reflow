@@ -217,7 +217,7 @@ impl RustStrategy {
         let mut dir = relative.join(dir);
 
         // Traverse up until we find `Cargo.lock` or reach `cwd`
-        while dir.starts_with(&relative) {
+        while dir.starts_with(relative) {
             // Check if `Cargo.lock` exists at this level
             let lockfile = dir.join("Cargo.lock");
             if lockfile.is_file() {

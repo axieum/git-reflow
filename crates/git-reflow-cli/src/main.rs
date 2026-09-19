@@ -6,9 +6,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::{env, io};
 use tracing::{error, trace};
-use tracing_log;
 use tracing_log::AsTrace;
-use tracing_subscriber;
 
 mod commands;
 
