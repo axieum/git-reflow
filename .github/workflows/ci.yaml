@@ -60,10 +60,12 @@ jobs:
       - name: ⬇️ Install nextest
         uses: taiki-e/install-action@v2
         with:
-          tool: nextest
+          tool: |
+            git-cliff
+            nextest
 
       - name: 🏗️ Build binaries
         run: cargo build
 
       - name: 🧪 Run tests
-        run: cargo nextest run
+        run: cargo nextest run --no-fail-fast

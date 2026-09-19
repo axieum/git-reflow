@@ -117,7 +117,7 @@ impl FromStr for Strategy {
     }
 }
 
-/// Deserializes a given string or struct into a result of [`T`].
+/// Deserializes a given string or struct into a result of `T`.
 ///
 /// # Arguments
 ///
@@ -125,8 +125,7 @@ impl FromStr for Strategy {
 ///
 /// # Returns
 ///
-/// A result of [`T`].
-///
+/// A result of `T`.
 pub fn string_or_struct<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     T: Deserialize<'de> + FromStr<Err = String>,
