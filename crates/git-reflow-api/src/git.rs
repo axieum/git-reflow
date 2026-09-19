@@ -58,6 +58,47 @@ pub fn sanitize_branch_name(pkg_name: &str) -> String {
         .join("-")
 }
 
+/// Stages and commits the specified changes in the Git repository.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to commit changes in.
+/// * `pathspecs` - A list of file paths/globs to stage and commit.
+/// * `message` - The commit message to use for the new commit.
+///
+/// # Returns
+///
+/// A result containing the Git object ID (OID) of the new commit.
+pub fn commit(repo: &Repository, pathspecs: &[&str], message: &str) -> anyhow::Result<git2::Oid> {
+    // Stage the changes in the index.
+    let mut index = repo.index().context("could not acquire index")?;
+    index
+        .add_all(pathspecs, git2::IndexAddOption::DEFAULT, None)
+        .context("could not add changes")?;
+
+    // Determine the parent commit(s) for the new commit.
+    let parent = match repo.head() {
+        Ok(head) => Some(head.peel_to_commit().context("failed to peel HEAD to commit")?),
+        Err(e) if e.code() == git2::ErrorCode::UnbornBranch => None,
+        Err(e) => return Err(e).context("failed to get HEAD"),
+    };
+    let parents = parent.iter().collect::<Vec<_>>();
+
+    // Commit the changes to the repository and return.
+    let tree_oid = index.write_tree().context("could not stage changes")?;
+    let signature = repo.signature()?;
+    Ok(repo
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &message,
+            &repo.find_tree(tree_oid)?,
+            &parents,
+        )
+        .context("could not commit changes")?)
+}
+
 /// A guard that ensures the Git repository is restored to its original state
 /// even if an error occurs or the process is terminated.
 ///
@@ -174,10 +215,8 @@ impl Drop for BranchGuard<'_> {
 mod tests {
     use super::*;
     use assert_fs::prelude::*;
-    use git2::{Signature, Time};
+    use git2::Signature;
     use rstest::rstest;
-    use std::fs;
-    use std::path::Path;
 
     /// Tests that package names are sanitized for use in Git branch names.
     #[rstest]
@@ -197,8 +236,10 @@ mod tests {
         let (temp_dir, repo) = create_test_repo();
 
         // Commit tracked files.
-        create_file_and_commit(&repo, "clean.txt", "clean content");
-        create_file_and_commit(&repo, "tracked.txt", "initial content");
+        temp_dir.child("clean.txt").write_str("clean content").unwrap();
+        commit(&repo, &["clean.txt"], "feat: add clean.txt").unwrap();
+        temp_dir.child("tracked.txt").write_str("initial content").unwrap();
+        commit(&repo, &["tracked.txt"], "feat: add tracked.txt").unwrap();
 
         // Write some changes to the filesystem.
         temp_dir.child("tracked.txt").write_str("updated content").unwrap();
@@ -215,11 +256,27 @@ mod tests {
         );
     }
 
+    /// Tests that files are committed correctly and the new commit exists in the repository.
+    #[test]
+    fn test_commit() {
+        // Create a git repository.
+        let (temp_dir, repo) = create_test_repo();
+
+        // Create a new file and commit it.
+        temp_dir.child("README.md").write_str("lorem ipsum").unwrap();
+        let commit_id = commit(&repo, &["README.md"], "docs: add `README.md`").unwrap();
+
+        // Verify that the commit was created and the file is tracked.
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head_commit.id(), commit_id);
+        assert!(repo.find_commit(commit_id).is_ok());
+    }
+
     /// Tests that a `BranchGuard` restores the repository state when dropped without disarming.
     #[test]
     fn test_branch_guard_restores_on_drop() {
         // Create a git repository.
-        let (_temp_dir, repo) = create_test_repo();
+        let (temp_dir, repo) = create_test_repo();
         let initial_head = repo.head().unwrap();
         let initial_branch = initial_head.shorthand().unwrap().to_string();
         let initial_commit_id = initial_head.peel_to_commit().unwrap().id();
@@ -235,7 +292,8 @@ mod tests {
         assert_eq!(repo.head().unwrap().shorthand().unwrap(), "test-branch");
 
         // Commit changes to the new branch.
-        let new_commit_id = create_file_and_commit(&repo, "test.txt", "test content");
+        temp_dir.child("test.txt").write_str("test content").unwrap();
+        let new_commit_id = commit(&repo, &["test.txt"], "feat: add test.txt").unwrap();
         assert_eq!(repo.head().unwrap().peel_to_commit().unwrap().id(), new_commit_id);
 
         // Drop the guard without disarming to restore.
@@ -251,7 +309,7 @@ mod tests {
     #[test]
     fn test_branch_guard_disarm_prevents_restoration() {
         // Create a git repository.
-        let (_temp_dir, repo) = create_test_repo();
+        let (temp_dir, repo) = create_test_repo();
 
         // Create a branch guard from the current HEAD.
         let mut guard = BranchGuard::from_head(&repo).unwrap();
@@ -264,7 +322,8 @@ mod tests {
         assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature-branch");
 
         // Commit changes to the new branch.
-        let new_commit_id = create_file_and_commit(&repo, "feature.txt", "feature content");
+        temp_dir.child("feature.txt").write_str("feature content").unwrap();
+        let new_commit_id = commit(&repo, &["feature.txt"], "feat: add feature.txt").unwrap();
 
         // Create another branch and switch to it.
         repo.branch("other-branch", &parent, false).unwrap();
@@ -319,7 +378,12 @@ mod tests {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let repo = Repository::init(temp_dir.path()).unwrap();
 
-        // Create initial commit.
+        // Configure the Git author.
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@localhost").unwrap();
+
+        // Create an initial commit.
         let sig = Signature::now("Test", "test@localhost").unwrap();
         let tree_oid = repo.index().unwrap().write_tree().unwrap();
         repo.commit(
@@ -333,34 +397,5 @@ mod tests {
         .unwrap();
 
         (temp_dir, repo)
-    }
-
-    /// Helper function to create a file and commit it.
-    fn create_file_and_commit(repo: &Repository, filename: &str, content: &str) -> git2::Oid {
-        // Write the file.
-        let repo_path = repo.path().parent().unwrap();
-        let file_path = repo_path.join(filename);
-        fs::write(&file_path, content).unwrap();
-
-        // Prepare the git tree.
-        let mut index = repo.index().unwrap();
-        index.add_path(Path::new(filename)).unwrap();
-        index.write().unwrap();
-
-        let tree_id = index.write_tree().unwrap();
-        let tree = repo.find_tree(tree_id).unwrap();
-        let parent = repo.head().unwrap().peel_to_commit().unwrap();
-
-        // Commit the file.
-        let sig = Signature::new("Test", "test@localhost", &Time::new(1234567890, 0)).unwrap();
-        repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
-            &format!("feat: add {}", filename),
-            &tree,
-            &[&parent],
-        )
-        .unwrap()
     }
 }
