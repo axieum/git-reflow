@@ -25,7 +25,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       "changelog-path": "CHANGELOG.md"
     },
     {
-      "dir": "packages\\example-api",
+      "dir": "packages/example-api",
       "name": "example-api",
       "strategy": {
         "python": {}
@@ -35,7 +35,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       "changelog-path": "CHANGELOG.md"
     },
     {
-      "dir": "packages\\example-cli",
+      "dir": "packages/example-cli",
       "name": "example-cli",
       "strategy": {
         "python": {}

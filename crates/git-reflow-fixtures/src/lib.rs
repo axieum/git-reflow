@@ -78,5 +78,10 @@ pub fn project_repo(#[default(".")] name: &str) -> (TempDir, Repository) {
     let temp_dir = project_dir(name);
     let repository = Repository::init(&temp_dir).unwrap();
 
+    // Configure the Git author.
+    let mut config = repository.config().unwrap();
+    config.set_str("user.name", "Test").unwrap();
+    config.set_str("user.email", "test@localhost").unwrap();
+
     (temp_dir, repository)
 }

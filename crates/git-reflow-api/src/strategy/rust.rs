@@ -306,10 +306,9 @@ mod tests {
     fn suggest_name_from_missing_cargo_toml(strategy: RustStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
 
-        assert_eq!(
-            strategy.suggest_name(&temp_dir).unwrap_err().to_string(),
-            "The system cannot find the file specified. (os error 2)",
-        );
+        let err = strategy.suggest_name(&temp_dir).unwrap_err();
+        let io_err = err.downcast_ref::<std::io::Error>().unwrap();
+        assert_eq!(io_err.kind(), std::io::ErrorKind::NotFound);
     }
 
     /// Tests that there are no suggested packages for a non-workspace Cargo project.

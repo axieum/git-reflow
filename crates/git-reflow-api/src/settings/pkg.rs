@@ -11,6 +11,7 @@ pub struct PackageConfig {
     /// The directory of the package root.
     ///
     /// **Default:** `.`
+    #[serde(serialize_with = "serialize_dir_as_slash")]
     pub dir: PathBuf,
     /// The name of the package.
     ///
@@ -108,6 +109,15 @@ For further assistance, run `git reflow --help` or visit https://github.com/axie
     }
 }
 
+/// Serializes a [`PathBuf`] using forward slashes (`/`) as the separator, regardless of platform,
+/// so that serialized output (and snapshot tests) are consistent across Windows and Unix-like systems.
+fn serialize_dir_as_slash<S>(path: &std::path::Path, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&path.to_string_lossy().replace('\\', "/"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +134,19 @@ mod tests {
         assert!(config.workspace);
         assert!(config.include_name_in_tag);
         assert_eq!(config.changelog_path(), PathBuf::from(".").join("CHANGELOG.md"));
+    }
+
+    /// Tests that the package directory is always serialised with forward slashes, regardless of platform.
+    #[test]
+    fn serializes_dir_with_forward_slashes() {
+        let config = PackageConfig {
+            dir: PathBuf::from("crates").join("example-api"),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+
+        assert!(json.contains(r#""dir":"crates/example-api""#), "json was: {json}");
     }
 
     /// Tests that explicit package config values are deserialised and retained when defaults are applied.
