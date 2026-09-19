@@ -1,0 +1,69 @@
+# Builds and tests the project
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  RUSTDOCFLAGS: -Dwarnings
+
+jobs:
+  lint:
+    name: Lint
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ✨ Checkout repository
+        uses: actions/checkout@v7
+
+      - name: 💄 Format
+        run: cargo fmt --all -- --check
+
+      - name: 🧹 Lint
+        run: cargo clippy -- -D clippy::all
+
+  doc:
+    name: Documentation
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ✨ Checkout repository
+        uses: actions/checkout@v7
+
+      - name: 🧪 Test docs
+        run: cargo test --doc
+
+      - name: 📄 Generate docs
+        run: cargo doc --document-private-items --no-deps
+
+  test:
+    name: Test
+
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: ✨ Checkout repository
+        uses: actions/checkout@v7
+
+      - name: ⬇️ Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: 🏗️ Build binaries
+        run: cargo build
+
+      - name: 🧪 Run tests
+        run: cargo nextest run
