@@ -57,7 +57,7 @@ jobs:
       - name: ✨ Checkout repository
         uses: actions/checkout@v7
 
-      - name: ⬇️ Install nextest
+      - name: ⬇️ Install tools
         uses: taiki-e/install-action@v2
         with:
           tool: |
