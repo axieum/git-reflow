@@ -68,7 +68,7 @@ async fn run(cli: CliArgs) -> anyhow::Result<()> {
     trace!("run `{:?}` command", cli.command);
     match cli.command {
         // $ git reflow config
-        Command::Config(cmd) => cmd.print_config(&config).await?,
+        Command::Config(cmd) => cmd.print_config(&config)?,
     }
 
     Ok(())

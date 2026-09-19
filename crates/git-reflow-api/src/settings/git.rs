@@ -1,3 +1,5 @@
+use crate::provider::GitProvider;
+
 /// The Git provider configuration.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -8,12 +10,7 @@ pub struct GitConfig {
     ///
     /// **Default:** github
     #[serde(default)]
-    pub git_provider: GitProvider,
-    /// The hostname of the Git provider.
-    ///
-    /// **Default:** github.com
-    #[serde(default = "default_git_host")]
-    pub git_host: String,
+    pub provider: GitProvider,
     /// The release branch name prefix.
     ///
     /// **Default:** reflow--branches--
@@ -36,11 +33,6 @@ pub struct GitConfig {
     pub separate_pull_requests: bool,
 }
 
-/// Returns the default value for `$.git_host`.
-fn default_git_host() -> String {
-    String::from("github.com")
-}
-
 /// Returns the default value for `$.commit_message_pattern`.
 fn default_commit_message_pattern() -> String {
     String::from("chore: release v{{ version }}")
@@ -49,19 +41,4 @@ fn default_commit_message_pattern() -> String {
 /// Returns the default value for `$.release_branch_prefix`.
 fn default_release_branch_prefix() -> String {
     String::from("reflow--branches--")
-}
-
-/// The type of Git provider, e.g. GitHub.
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GitProvider {
-    /// [Bitbucket](https://bitbucket.org/).
-    Bitbucket,
-    /// [Gitea](https://gitea.com/).
-    Gitea,
-    /// [GitHub](https://github.com/).
-    #[default]
-    GitHub,
-    /// [GitLab](https://gitlab.com/).
-    GitLab,
 }
