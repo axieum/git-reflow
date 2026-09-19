@@ -148,16 +148,27 @@ pub fn render_changelog_markdown(context: &Value, runner: Option<&dyn CommandRun
 /// * `context` - The `git-cliff` context data.
 ///
 /// # Returns
-/// A result containing the parsed [Semantic Version](https://semver.org/).
-pub fn get_version_from_git_cliff_context(context: &Value) -> anyhow::Result<Version> {
-    context
+/// A result containing the current (`$.previous.version`) and next (`$.version`)
+/// versions as parsed [Semantic Version](https://semver.org/).
+pub fn get_version_from_git_cliff_context(context: &Value) -> anyhow::Result<(Option<Version>, Version)> {
+    let current_version = context
+        .get("previous")
+        .and_then(|v| v.get("version"))
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim_start_matches('v'))
+        .map(|v| Version::from_str(v).map_err(|err| anyhow!("invalid semver version in git-cliff context: {}", err)))
+        .transpose()?;
+
+    let next_version = context
         .get("version")
         .and_then(|v| v.as_str())
         .map(|v| v.trim_start_matches('v'))
         .ok_or_else(|| anyhow!("missing version in git-cliff context"))
         .and_then(|v| {
             Version::from_str(v).map_err(|err| anyhow!("invalid semver version in git-cliff context: {}", err))
-        })
+        })?;
+
+    Ok((current_version, next_version))
 }
 
 #[cfg(test)]
@@ -425,25 +436,34 @@ mod tests {
         assert_eq!(result.unwrap_err().to_string(), "git-cliff error: something went wrong");
     }
 
-    /// Tests that a valid semantic version is returned from the `git-cliff` JSON context.
+    /// Tests that both the current and next versions are returned from the `git-cliff` JSON context.
+    #[test]
+    fn get_version_from_git_cliff_context_with_valid_previous_version() {
+        let context = serde_json::json!({"version": "1.1.0", "previous": {"version": "v1.0.1"}});
+        let result = get_version_from_git_cliff_context(&context);
+
+        assert_eq!(result.unwrap(), (Some(Version::new(1, 0, 1)), Version::new(1, 1, 0)));
+    }
+
+    /// Tests that a valid next version (with no previous version) is returned from the `git-cliff` JSON context.
     #[test]
     fn get_version_from_git_cliff_context_with_valid_version() {
         let context = serde_json::json!({"version": "1.0.1"});
         let result = get_version_from_git_cliff_context(&context);
 
-        assert_eq!(result.unwrap(), Version::new(1, 0, 1));
+        assert_eq!(result.unwrap(), (None, Version::new(1, 0, 1)));
     }
 
-    /// Tests that a valid prefixed semantic version is returned from the `git-cliff` JSON context.
+    /// Tests that a valid prefixed next version is returned from the `git-cliff` JSON context.
     #[test]
     fn get_version_from_git_cliff_context_with_valid_v_prefixed_version() {
         let context = serde_json::json!({"version": "v1.1.0"});
         let result = get_version_from_git_cliff_context(&context);
 
-        assert_eq!(result.unwrap(), Version::new(1, 1, 0));
+        assert_eq!(result.unwrap(), (None, Version::new(1, 1, 0)));
     }
 
-    /// Tests that a valid semantic version is returned from the `git-cliff` JSON context.
+    /// Tests that an invalid next version is handled gracefully.
     #[test]
     fn get_version_from_git_cliff_context_with_invalid_version() {
         let context = serde_json::json!({"version": "invalid version"});
@@ -456,7 +476,20 @@ mod tests {
         );
     }
 
-    /// Tests that a valid semantic version is returned from the `git-cliff` JSON context.
+    /// Tests that an invalid previous version is handled gracefully.
+    #[test]
+    fn get_version_from_git_cliff_context_with_invalid_previous_version() {
+        let context = serde_json::json!({"version": "1.1.0", "previous": {"version": "invalid version"}});
+        let result = get_version_from_git_cliff_context(&context);
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "invalid semver version in git-cliff context: unexpected character 'i' while parsing major version number"
+        );
+    }
+
+    /// Tests that a missing version is handled gracefully.
     #[test]
     fn get_version_from_git_cliff_context_with_missing_version() {
         let context = serde_json::json!({"dummy": "text"});
