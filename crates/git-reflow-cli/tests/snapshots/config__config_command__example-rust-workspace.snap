@@ -16,7 +16,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
   "packages": [
     {
       "dir": ".",
-      "name": "[TEMPDIR]",
+      "name": "example-rust-workspace",
       "strategy": {
         "rust": {}
       },

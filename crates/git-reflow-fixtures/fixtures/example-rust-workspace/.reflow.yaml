@@ -1,0 +1,8 @@
+# https://github.com/axieum/git-reflow
+
+packages:
+  # The root package of the workspace.
+  # NB: We include this here, since `Cargo.toml` at the root of a workspace does not define a "workspace" name.
+  #     By default, it will use the parent directory name, but if this is not reliable, you can specify the name here.
+  - name: example-rust-workspace
+    include-name-in-tag: false

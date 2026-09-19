@@ -5,7 +5,6 @@ use rstest::*;
 use std::path::PathBuf;
 
 /// A list of [Insta](https://insta.rs/docs) snapshot testing filters of CLI stdout.
-#[allow(dead_code)]
 pub const INSTA_STDOUT_FILTERS: [(&str, &str); 3] = [
     (r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{6}Z", "[TIMESTAMP]"),
     (r"\.tmp\w{6}", "[TEMPDIR]"),
