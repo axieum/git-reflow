@@ -10,13 +10,14 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       }
     },
     "release-branch-prefix": "reflow--branches--",
-    "commit-message-pattern": "chore: release v{{ version }}",
+    "commit-message-pattern": "chore{{#if scope}}({{ scope }}){{/if}}: release v{{ version }}",
     "separate-pull-requests": false
   },
   "packages": [
     {
       "dir": ".",
       "name": "example-python-uv-workspace",
+      "scope": null,
       "strategy": {
         "python": {}
       },
@@ -27,6 +28,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     {
       "dir": "packages/example-api",
       "name": "example-api",
+      "scope": "example-api",
       "strategy": {
         "python": {}
       },
@@ -37,6 +39,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     {
       "dir": "packages/example-cli",
       "name": "example-cli",
+      "scope": "example-cli",
       "strategy": {
         "python": {}
       },

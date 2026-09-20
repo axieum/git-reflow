@@ -10,13 +10,14 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       }
     },
     "release-branch-prefix": "reflow--branches--",
-    "commit-message-pattern": "chore: release v{{ version }}",
+    "commit-message-pattern": "chore{{#if scope}}({{ scope }}){{/if}}: release v{{ version }}",
     "separate-pull-requests": false
   },
   "packages": [
     {
       "dir": ".",
       "name": "example-rust",
+      "scope": null,
       "strategy": {
         "rust": {}
       },

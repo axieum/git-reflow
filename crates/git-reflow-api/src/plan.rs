@@ -1,23 +1,27 @@
 use crate::git_cliff::{get_version_from_git_cliff_context, render_changelog_markdown, run_git_cliff};
 use crate::settings::AppConfig;
 use crate::settings::pkg::PackageConfig;
+use anyhow::Context;
+use handlebars::Handlebars;
 use semver::Version;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tracing::debug;
 
 /// A planned package release.
 #[allow(unused)]
 pub struct PackageRelease<'pkg> {
     /// The package configuration.
-    pkg: &'pkg PackageConfig,
+    pub pkg: &'pkg PackageConfig,
     /// The current version of the package, if it exists.
-    current_version: Option<Version>,
+    pub current_version: Option<Version>,
     /// The next (target) version of the package.
-    next_version: Version,
+    pub next_version: Version,
+    /// The commit message for the package release.
+    pub commit_message: String,
     /// The rendered changelog markdown for the package.
-    changelog_md: String,
+    pub changelog_md: String,
     /// The `git-cliff` context for the package.
-    context: Value,
+    pub context: Value,
 }
 
 /// Plans the releases for all in-scope packages.
@@ -25,12 +29,16 @@ pub struct PackageRelease<'pkg> {
 /// # Arguments
 ///
 /// * `config` - The app configuration.
+/// * `target_branch` - The target branch for the release.
 ///
 /// # Returns
 ///
 /// A result of all planned package release information.
-pub async fn plan_releases(config: &AppConfig) -> anyhow::Result<Vec<PackageRelease<'_>>> {
-    let mut planned_releases = Vec::new();
+pub async fn plan_releases<'pkg>(
+    config: &'pkg AppConfig,
+    target_branch: &str,
+) -> anyhow::Result<Vec<PackageRelease<'pkg>>> {
+    let mut planned_releases = Vec::with_capacity(config.packages.len());
     for pkg in &config.packages {
         // Run `git-cliff` in the package directory.
         let context = match run_git_cliff(&pkg.dir, None)? {
@@ -50,11 +58,26 @@ pub async fn plan_releases(config: &AppConfig) -> anyhow::Result<Vec<PackageRele
         let (current_version, next_version) = get_version_from_git_cliff_context(&context)?;
         let changelog_md = render_changelog_markdown(&context, None)?;
 
+        // Render the commit message for this package release.
+        // NB: The scope falls back to the package name unless this is the root package (see `PackageConfig::scope`).
+        let commit_message = Handlebars::new()
+            .render_template(
+                &config.git.commit_message_pattern,
+                &json!({
+                    "package": pkg.name(),
+                    "scope": pkg.scope(),
+                    "version": next_version.to_string(),
+                    "branch": target_branch,
+                }),
+            )
+            .context("failed to render commit message")?;
+
         // Append the planned release information for this package.
         planned_releases.push(PackageRelease {
             pkg,
             current_version,
             next_version,
+            commit_message,
             changelog_md,
             context,
         });
@@ -106,15 +129,19 @@ mod tests {
 
         // Call `plan_releases` and assert that the planned releases are as expected.
         // NB: We expect two planned releases: one for the root package and one for the `example-api` package.
-        let planned_releases = plan_releases(&config).await.unwrap();
-        assert_eq!(planned_releases.len(), 2);
-        assert_eq!(planned_releases[0].pkg.dir, Path::new("."));
-        assert_eq!(planned_releases[1].pkg.dir, Path::new("crates/example-api"));
-        assert_eq!(planned_releases[0].next_version, Version::parse("1.1.0").unwrap());
-        assert_eq!(planned_releases[1].next_version, Version::parse("1.1.0").unwrap());
-        assert!(!planned_releases[0].changelog_md.is_empty());
-        assert!(!planned_releases[1].changelog_md.is_empty());
-        assert!(planned_releases[0].context.is_object());
-        assert!(planned_releases[1].context.is_object());
+        let planned = plan_releases(&config, "main").await.unwrap();
+        assert_eq!(planned.len(), 2);
+        assert_eq!(planned[0].pkg.dir, Path::new("."));
+        assert_eq!(planned[1].pkg.dir, Path::new("crates/example-api"));
+        assert_eq!(planned[0].current_version, Some(Version::parse("1.0.0").unwrap()));
+        assert_eq!(planned[1].current_version, Some(Version::parse("1.0.0").unwrap()));
+        assert_eq!(planned[0].next_version, Version::parse("1.1.0").unwrap());
+        assert_eq!(planned[1].next_version, Version::parse("1.1.0").unwrap());
+        assert_eq!(planned[0].commit_message, "chore: release v1.1.0");
+        assert_eq!(planned[1].commit_message, "chore(example-api): release v1.1.0");
+        assert!(!planned[0].changelog_md.is_empty());
+        assert!(!planned[1].changelog_md.is_empty());
+        assert!(planned[0].context.is_object());
+        assert!(planned[1].context.is_object());
     }
 }

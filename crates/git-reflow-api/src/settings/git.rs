@@ -21,9 +21,10 @@ pub struct GitConfig {
     /// The following placeholders are available:
     /// - `{{ version }}`: The new version being released (excluding 'v' prefix).
     /// - `{{ package }}`: The name of the package being released.
+    /// - `{{ scope }}`: The conventional commit scope of the package being released (see `packages[].scope`).
     /// - `{{ branch }}`: The target branch name.
     ///
-    /// **Default:** chore: release v{{ version }}
+    /// **Default:** chore{{#if scope}}({{ scope }}){{/if}}: release v{{ version }}
     #[serde(default = "default_commit_message_pattern")]
     pub commit_message_pattern: String,
     /// If `true`, create separate pull requests for each package.
@@ -35,7 +36,7 @@ pub struct GitConfig {
 
 /// Returns the default value for `$.commit_message_pattern`.
 fn default_commit_message_pattern() -> String {
-    String::from("chore: release v{{ version }}")
+    String::from("chore{{#if scope}}({{ scope }}){{/if}}: release v{{ version }}")
 }
 
 /// Returns the default value for `$.release_branch_prefix`.

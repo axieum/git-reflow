@@ -1,7 +1,7 @@
 use crate::detect::detect_strategy;
 use crate::strategy::{BaseStrategy, Strategy};
 use anyhow::Context;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::trace;
 
 /// The individual package configuration.
@@ -17,6 +17,12 @@ pub struct PackageConfig {
     ///
     /// **Default:** `<auto-detected>`
     pub name: Option<String>,
+    /// The conventional commit scope used in commits that affect this package, e.g. `api` in `chore(api): ...`.
+    ///
+    /// If not specified, the package name is used, unless this is the root package, in which no scope is used.
+    ///
+    /// **Default:** `$.name` (or `None` for the root package)
+    pub scope: Option<String>,
     /// The release strategy.
     ///
     /// **Default:** `<auto-detected>`
@@ -43,6 +49,8 @@ impl Default for PackageConfig {
             dir: PathBuf::from("."),
             // The package name is auto-detected from the package's manifest file, e.g. `Cargo.toml`.
             name: None,
+            // By default, the conventional commit scope should fallback to the package name.
+            scope: None,
             // The package strategy is auto-detected from the pacakge's manifest file, e.g. `Cargo.toml`
             strategy: None,
             // By default, we assume that the package is part of a workspace and will detect nested packages if any.
@@ -59,6 +67,14 @@ impl PackageConfig {
     /// Returns the guaranteed name of the package.
     pub fn name(&self) -> &str {
         self.name.as_ref().unwrap()
+    }
+
+    /// Returns the effective conventional commit scope for the package, if any.
+    ///
+    /// This is `None` for the root package unless a `scope` is explicitly configured, and is otherwise
+    /// resolved to the package `name` by [`Self::apply_defaults`] if not explicitly configured.
+    pub fn scope(&self) -> Option<&str> {
+        self.scope.as_deref()
     }
 
     /// Returns the guaranteed release strategy for the package.
@@ -105,6 +121,12 @@ For further assistance, run `git reflow --help` or visit https://github.com/axie
             trace!("detected package name `{}` in `{}`", self.name(), self.dir.display());
         }
 
+        // If no explicit scope is set, default it to the package name, unless this is the root package.
+        if self.scope.is_none() && self.dir != Path::new(".") {
+            self.scope = Some(self.name().to_string());
+            trace!("default package scope to `{}` in `{}`", self.name(), self.dir.display());
+        }
+
         Ok(self)
     }
 }
@@ -130,6 +152,7 @@ mod tests {
 
         assert_eq!(config.dir, PathBuf::from("."));
         assert_eq!(config.name, None);
+        assert_eq!(config.scope, None);
         assert_eq!(config.strategy, None);
         assert!(config.workspace);
         assert!(config.include_name_in_tag);
@@ -167,6 +190,7 @@ mod tests {
 
         assert_eq!(config.dir, PathBuf::from("packages/api"));
         assert_eq!(config.name(), "api");
+        assert_eq!(config.scope(), Some("api"));
         assert_eq!(config.strategy(), &Strategy::Basic(BasicStrategy::default()));
         assert!(!config.workspace);
         assert!(!config.include_name_in_tag);
@@ -174,5 +198,50 @@ mod tests {
             config.changelog_path(),
             PathBuf::from("packages/api").join("docs/changes.md")
         );
+    }
+
+    /// Tests that the conventional commit scope defaults to the package name for non-root packages.
+    #[test]
+    fn scope_defaults_to_the_package_name_for_non_root_packages() {
+        let config = PackageConfig {
+            dir: PathBuf::from("crates").join("example-api"),
+            name: Some(String::from("example-api")),
+            strategy: Some(Strategy::Basic(BasicStrategy::default())),
+            ..Default::default()
+        }
+        .apply_defaults()
+        .unwrap();
+
+        assert_eq!(config.scope(), Some("example-api"));
+    }
+
+    /// Tests that the conventional commit scope remains `None` for the root package when no explicit scope is set.
+    #[test]
+    fn scope_is_none_for_root_package_by_default() {
+        let config = PackageConfig {
+            name: Some(String::from("example-rust-workspace")),
+            strategy: Some(Strategy::Basic(BasicStrategy::default())),
+            ..Default::default()
+        }
+        .apply_defaults()
+        .unwrap();
+
+        assert_eq!(config.scope(), None);
+    }
+
+    /// Tests that an explicit conventional commit scope takes precedence and is left untouched by defaulting.
+    #[test]
+    fn scope_uses_explicit_value_when_set() {
+        let config = PackageConfig {
+            dir: PathBuf::from("crates").join("example-api"),
+            name: Some(String::from("example-api")),
+            scope: Some(String::from("api")),
+            strategy: Some(Strategy::Basic(BasicStrategy::default())),
+            ..Default::default()
+        }
+        .apply_defaults()
+        .unwrap();
+
+        assert_eq!(config.scope(), Some("api"));
     }
 }
