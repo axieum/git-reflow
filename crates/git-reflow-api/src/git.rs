@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{Context, anyhow, bail};
 use git2::Repository;
 use tracing::{debug, error, warn};
 
@@ -98,6 +98,85 @@ pub fn commit(repo: &Repository, pathspecs: &[&str], message: &str) -> anyhow::R
     .context("could not commit changes")
 }
 
+/// A parsed Git remote URL containing the host, owner, and repository names.
+pub struct RemoteRef {
+    /// The host of the Git remote, e.g. `github.com`.
+    pub host: String,
+    /// The owner of the repository, e.g. `axieum`.
+    pub owner: String,
+    /// The name of the repository, e.g. `git-reflow`.
+    pub repo: String,
+}
+
+/// Parses a Git remote URL into its host, owner, and repository names.
+///
+/// # Arguments
+///
+/// * `url` - The Git remote URL to parse, e.g. `git@github.com:axieum/git-reflow.git`.
+///
+/// # Returns
+///
+/// A result containing a [`RemoteRef`] containing the parsed host, owner, and repository names.
+pub fn parse_remote_url(url: &str) -> anyhow::Result<RemoteRef> {
+    let trimmed = url.trim_end_matches(".git");
+    let host: String;
+    let path: String;
+
+    // Parse the URL into its host and path.
+    if !trimmed.contains("://") {
+        // SCP-like syntax, e.g. `git@host:owner/repo.git`.
+        if let Some((host_part, path_part)) = trimmed.split_once(':') {
+            host = host_part.rsplit('@').next().unwrap_or(host_part).to_string();
+            path = path_part.to_string();
+        } else {
+            bail!("unrecognised remote URL: {url}");
+        }
+    } else {
+        // URL-style syntax, e.g. `https://`, `ssh://`, or `git://`.
+        let parsed = url::Url::parse(trimmed).context("failed to parse remote URL")?;
+        host = parsed
+            .host_str()
+            .ok_or_else(|| anyhow!("missing host in remote URL: {url}"))?
+            .to_string();
+        path = parsed.path().to_string();
+    }
+
+    // Split the path into owner and repo, ignoring any leading path segments.
+    let path = path.trim_start_matches('/').trim_end_matches('/');
+    let (owner, repo) = path
+        .rsplit_once('/')
+        .ok_or_else(|| anyhow!("missing owner/repo in remote URL path: {path}"))?;
+    let owner = owner.rsplit('/').next().unwrap_or(owner);
+    if owner.is_empty() || repo.is_empty() {
+        bail!("empty owner or repo in remote URL: {url}");
+    }
+
+    Ok(RemoteRef {
+        host,
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+    })
+}
+
+/// Returns the parsed Git `origin` remote URL for the given repository, if it has a remote.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to get the remote for.
+///
+/// # Returns
+///
+/// A result containing an optional [`RemoteRef`] containing the parsed host, owner, and repository names, if any.
+pub fn get_origin_remote(repo: &Repository) -> anyhow::Result<Option<RemoteRef>> {
+    repo.find_remote("origin")
+        .ok()
+        .map(|remote| {
+            let url = remote.url().context("origin remote has no URL")?;
+            parse_remote_url(url)
+        })
+        .transpose()
+}
+
 /// A guard that ensures the Git repository is restored to its original state
 /// even if an error occurs or the process is terminated.
 ///
@@ -122,10 +201,10 @@ pub fn commit(repo: &Repository, pathspecs: &[&str], message: &str) -> anyhow::R
 /// }
 /// ```
 pub struct BranchGuard<'repo> {
-    repo: &'repo Repository,
-    original_branch: String,
-    original_commit_id: git2::Oid,
-    should_restore: bool,
+    pub repo: &'repo Repository,
+    pub original_branch: String,
+    pub original_commit_id: git2::Oid,
+    pub should_restore: bool,
 }
 
 impl<'repo> BranchGuard<'repo> {
@@ -269,6 +348,66 @@ mod tests {
         let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
         assert_eq!(head_commit.id(), commit_id);
         assert!(repo.find_commit(commit_id).is_ok());
+    }
+
+    /// Tests that a remote URLs are parsed correctly.
+    #[rstest]
+    #[rustfmt::skip]
+    #[case::github_ssh("git@github.com:axieum/git-reflow.git", "github.com", "axieum", "git-reflow")]
+    #[case::github_https("https://github.com/axieum/git-reflow.git", "github.com", "axieum", "git-reflow")]
+    #[case::github_enterprise_ssh("git@github.org.com:axieum/git-reflow.git", "github.org.com", "axieum", "git-reflow")]
+    #[case::github_enterprise_ssh_with_port("ssh://git@github.org.com:2222/axieum/git-reflow.git", "github.org.com", "axieum", "git-reflow")]
+    #[case::github_enterprise_https("https://github.org.com/axieum/git-reflow.git", "github.org.com", "axieum", "git-reflow")]
+    #[case::bitbucket_ssh("git@bitbucket.org:axieum/git-reflow.git", "bitbucket.org", "axieum", "git-reflow")]
+    #[case::bitbucket_https("https://bitbucket.org/axieum/git-reflow.git", "bitbucket.org", "axieum", "git-reflow")]
+    #[case::bitbucket_server_ssh("ssh://git@bitbucket.org.com/axieum/git-reflow.git", "bitbucket.org.com", "axieum", "git-reflow")]
+    #[case::bitbucket_server_ssh_with_port("ssh://git@bitbucket.org.com:2222/axieum/git-reflow.git", "bitbucket.org.com", "axieum", "git-reflow")]
+    #[case::bitbucket_server_https("https://bitbucket.org.com/scm/axieum/git-reflow.git", "bitbucket.org.com", "axieum", "git-reflow")]
+    #[case::gitea_ssh("git@gitea.org.com:axieum/git-reflow.git", "gitea.org.com", "axieum", "git-reflow")]
+    #[case::gitea_https("https://gitea.org.com/axieum/git-reflow.git", "gitea.org.com", "axieum", "git-reflow")]
+    #[case::gitea_enterprise_ssh("ssh://git@bitbucket.org.com/axieum/git-reflow.git", "bitbucket.org.com", "axieum", "git-reflow")]
+    #[case::gitea_enterprise_ssh_with_port("ssh://git@bitbucket.org.com:2222/axieum/git-reflow.git", "bitbucket.org.com", "axieum", "git-reflow")]
+    #[case::gitea_enterprise_https("https://bitbucket.org.com/scm/axieum/git-reflow.git", "bitbucket.org.com", "axieum", "git-reflow")]
+    #[case::gitlab_ssh("git@gitlab.com:axieum/git-reflow.git", "gitlab.com", "axieum", "git-reflow")]
+    #[case::gitlab_https("https://gitlab.com/axieum/git-reflow.git", "gitlab.com", "axieum", "git-reflow")]
+    #[case::gitlab_enterprise_ssh("git@gitlab.org.com:axieum/git-reflow.git", "gitlab.org.com", "axieum", "git-reflow")]
+    #[case::gitlab_enterprise_ssh_with_port("ssh://git@gitlab.org.com:2222/axieum/git-reflow.git", "gitlab.org.com", "axieum", "git-reflow")]
+    #[case::gitlab_enterprise_https("https://gitlab.org.com/axieum/git-reflow.git", "gitlab.org.com", "axieum", "git-reflow")]
+    fn test_parse_remote_url(
+        #[case] url: &str,
+        #[case] expected_host: &str,
+        #[case] expected_owner: &str,
+        #[case] expected_repo: &str,
+    ) {
+        let remote = parse_remote_url(url).unwrap();
+        assert_eq!(remote.host, expected_host);
+        assert_eq!(remote.owner, expected_owner);
+        assert_eq!(remote.repo, expected_repo);
+    }
+
+    /// Tests that the Git `origin` remote is parsed correctly.
+    #[test]
+    fn test_get_origin_remote() {
+        // Create a git repository with an `origin` remote URL.
+        let (_temp_dir, repo) = create_test_repo();
+        repo.remote("origin", "git@github.com:axieum/git-reflow.git").unwrap();
+
+        // Verify that the remote is parsed correctly.
+        let remote = get_origin_remote(&repo).unwrap().expect("origin remote should exist");
+        assert_eq!(remote.host, "github.com");
+        assert_eq!(remote.owner, "axieum");
+        assert_eq!(remote.repo, "git-reflow");
+    }
+
+    /// Tests that the Git `origin` remote returns `None` if it does not exist.
+    #[test]
+    fn test_get_origin_remote_when_none() {
+        // Create a git repository without an `origin` remote URL.
+        let (_temp_dir, repo) = create_test_repo();
+
+        // Verify that the parsed remote is `None`.
+        let remote = get_origin_remote(&repo).unwrap();
+        assert!(remote.is_none());
     }
 
     /// Tests that a `BranchGuard` restores the repository state when dropped without disarming.
