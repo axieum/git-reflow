@@ -1,4 +1,5 @@
 use crate::commands::config::ConfigCommand;
+use crate::commands::plan::PlanCommand;
 use clap::{ColorChoice, Parser, builder::PathBufValueParser};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use git_reflow_api::settings;
@@ -29,6 +30,8 @@ pub struct CliArgs {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
+    /// Plan the releases for packages/s without actually releasing anything.
+    Plan(PlanCommand),
     /// Print the configuration and exit.
     Config(ConfigCommand),
 }
@@ -41,7 +44,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Set up the logging.
     tracing_subscriber::fmt()
-        .with_max_level(cli.verbose.log_level_filter().as_trace())
+        .with_env_filter(
+            // Prefer the `REFLOW_LOG` environment variable, e.g. `REFLOW_LOG=debug,handlebars=debug`.
+            tracing_subscriber::EnvFilter::try_from_env("REFLOW_LOG").unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::builder()
+                    .with_default_directive(cli.verbose.log_level_filter().as_trace().into())
+                    .from_env_lossy()
+                    .add_directive("handlebars=warn".parse().unwrap())
+            }),
+        )
         .with_ansi(match cli.color {
             ColorChoice::Auto => env::var("NO_COLOR").is_err() && io::stdout().is_terminal(),
             ColorChoice::Always => true,
@@ -67,6 +78,8 @@ async fn run(cli: CliArgs) -> anyhow::Result<()> {
     match cli.command {
         // $ git reflow config
         Command::Config(cmd) => cmd.print_config(&config)?,
+        // $ git reflow plan [package] ...
+        Command::Plan(cmd) => cmd.plan(&config).await?,
     }
 
     Ok(())
