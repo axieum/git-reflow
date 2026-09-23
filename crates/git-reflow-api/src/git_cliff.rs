@@ -92,7 +92,7 @@ pub fn run_git_cliff(dir: &Path, runner: Option<&dyn CommandRunner>) -> anyhow::
 /// Spawns a [`git-cliff`](https://github.com/orhun/git-cliff) process in a given directory and
 /// applies the given context.
 ///
-/// > `git-cliff --workdir ${dir} --from-context - << ${context}`
+/// > `git-cliff --from-context - --prepend ${path} --latest << ${context}`
 ///
 /// # Arguments
 /// * `path` - The path to write the changelog to.
@@ -101,10 +101,10 @@ pub fn run_git_cliff(dir: &Path, runner: Option<&dyn CommandRunner>) -> anyhow::
 pub fn apply_git_cliff_context(path: &Path, context: &Value, runner: Option<&dyn CommandRunner>) -> anyhow::Result<()> {
     // Prepare `git-cliff` arguments.
     let context_json = serde_json::to_string(&[context]).context("failed to serialize context")?;
-    let args = ["--from-context", "-", "--output", &path.to_string_lossy()];
+    let args = ["--from-context", "-", "--prepend", &path.to_string_lossy(), "--latest"];
 
     // Invoke the `git-cliff` command.
-    debug!("$ git-cliff --from-context - --output {}", path.display());
+    trace!("$ git-cliff --from-context - --prepend {} --latest", path.display());
     let runner = runner.unwrap_or(&GitCliffRunner);
     let output = runner.run(&args, Some(&context_json))?;
 
@@ -128,7 +128,7 @@ pub fn render_changelog_markdown(context: &Value, runner: Option<&dyn CommandRun
     let context_json = serde_json::to_string(&[context]).context("failed to serialize context")?;
     let args = ["--from-context", "-", "--output", "-"];
 
-    debug!("$ git-cliff --from-context - --output -");
+    trace!("$ git-cliff --from-context - --output -");
     let runner = runner.unwrap_or(&GitCliffRunner);
     let output = runner.run(&args, Some(&context_json))?;
 
@@ -395,7 +395,7 @@ mod tests {
         runner
             .expect_run()
             .withf(move |args, input| {
-                args == ["--from-context", "-", "--output", &changelog_path_str]
+                args == ["--from-context", "-", "--prepend", &changelog_path_str, "--latest"]
                     && input.as_deref() == Some(r#"[{"version":"1.0.0"}]"#)
             })
             .returning(move |_, _| {
@@ -422,7 +422,7 @@ mod tests {
         runner
             .expect_run()
             .withf(move |args, input| {
-                args == ["--from-context", "-", "--output", &changelog_path_str]
+                args == ["--from-context", "-", "--prepend", &changelog_path_str, "--latest"]
                     && input.as_deref() == Some(r#"[{"version":"1.0.0"}]"#)
             })
             .returning(move |_, _| {
