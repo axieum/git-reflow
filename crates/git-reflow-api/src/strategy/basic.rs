@@ -3,6 +3,7 @@ use crate::strategy::BaseStrategy;
 use anyhow::Context;
 use semver::Version;
 use std::path::Path;
+use tracing::debug;
 
 /// The basic release strategy.
 #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -12,11 +13,33 @@ pub struct BasicStrategy {
 }
 
 impl BaseStrategy for BasicStrategy {
-    fn write_version(&self, new_version: &Version, config: &PackageConfig) -> anyhow::Result<()> {
-        std::fs::write(config.dir.join("VERSION.txt"), format!("v{new_version}"))?;
+    /// Writes a new version to the `VERSION.txt` file.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_version` - The new version to apply.
+    /// * `config` - The package configuration.
+    /// * `dry_run` - If true, do not actually write the changes.
+    fn write_version(&self, new_version: &Version, config: &PackageConfig, dry_run: bool) -> anyhow::Result<()> {
+        let path = config.dir.join("VERSION.txt");
+        if !dry_run {
+            std::fs::write(&path, format!("v{new_version}"))?;
+            debug!("wrote `v{}` to `{}`", new_version, path.display());
+        } else {
+            debug!("write `v{}` to `{}` (dry run)", new_version, path.display());
+        }
         Ok(())
     }
 
+    /// Suggests the package name from the directory name.
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - The package directory to get the name for.
+    ///
+    /// # Returns
+    ///
+    /// The package name for the given project.
     fn suggest_name(&self, dir: &Path) -> anyhow::Result<String> {
         let dir = if dir.is_absolute() {
             dir.to_path_buf()
@@ -56,10 +79,28 @@ mod tests {
         };
 
         strategy
-            .write_version(&Version::parse("1.2.3-rc.2").unwrap(), &config)
+            .write_version(&Version::parse("1.2.3-rc.2").unwrap(), &config, false)
             .unwrap();
 
         dir.child("VERSION.txt").assert("v1.2.3-rc.2");
+    }
+
+    /// Tests that the version is *not* written to a file in the package root when performing a dry run.
+    #[rstest]
+    fn write_version_with_dry_run(strategy: BasicStrategy) {
+        let dir = TempDir::new().unwrap();
+        let config = PackageConfig {
+            dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        dir.child("VERSION.txt").write_str("v1.2.3-rc.1").unwrap();
+        strategy
+            .write_version(&Version::parse("1.2.3-rc.2").unwrap(), &config, true)
+            .unwrap();
+
+        // The version should not be updated because this is a dry run.
+        dir.child("VERSION.txt").assert("v1.2.3-rc.1");
     }
 
     /// Tests that the suggested name for a path is the folder's name.

@@ -24,11 +24,12 @@ impl BaseStrategy for PythonStrategy {
     ///
     /// * `new_version` - The new version to apply.
     /// * `config` - The package configuration.
-    fn write_version(&self, new_version: &Version, config: &PackageConfig) -> anyhow::Result<()> {
+    /// * `dry_run` - If true, do not actually write the changes.
+    fn write_version(&self, new_version: &Version, config: &PackageConfig, dry_run: bool) -> anyhow::Result<()> {
         // Update the `pyproject.toml` file
         let pyproject = &config.dir.join("pyproject.toml");
         if pyproject.try_exists()? {
-            return Self::write_version_to_pyproject_toml(pyproject, new_version);
+            return Self::write_version_to_pyproject_toml(pyproject, new_version, dry_run);
         } else {
             debug!(
                 "a `pyproject.toml` file was not found at `{}`, skipping",
@@ -39,7 +40,7 @@ impl BaseStrategy for PythonStrategy {
         // Update the `setup.py` file
         let setup_py = &config.dir.join("setup.py");
         if setup_py.try_exists()? {
-            return Self::write_version_to_setup_py(setup_py, new_version);
+            return Self::write_version_to_setup_py(setup_py, new_version, dry_run);
         } else {
             debug!("a `setup.py` file was not found at `{}`, skipping", setup_py.display());
         }
@@ -61,12 +62,14 @@ impl BaseStrategy for PythonStrategy {
     ///      - `name = ...`
     ///
     /// # Arguments
+    ///
     /// * `dir` - The package directory to get the name for.
     ///
     /// # Returns
+    ///
     /// The package name for the given Python project.
     fn suggest_name(&self, dir: &Path) -> anyhow::Result<String> {
-        // Try `pyproject.toml`
+        // Try `pyproject.toml`.
         let pyproject = &dir.join("pyproject.toml");
         if pyproject.try_exists()?
             && let Some(name) = Self::suggest_name_from_pyproject_toml(pyproject)?
@@ -74,7 +77,7 @@ impl BaseStrategy for PythonStrategy {
             return Ok(name);
         }
 
-        // Try `setup.py`
+        // Try `setup.py`.
         let setup_py = &dir.join("setup.py");
         if setup_py.try_exists()?
             && let Some(name) = Self::suggest_name_from_setup_py(setup_py)?
@@ -82,16 +85,18 @@ impl BaseStrategy for PythonStrategy {
             return Ok(name);
         }
 
-        // Unsupported file
+        // Unsupported file.
         Err(anyhow!("could not determine name for package"))
     }
 
     /// Suggests Python workspace members as package configurations that should be included.
     ///
     /// # Arguments
+    ///
     /// * `dir` - The directory to a *possible* Python workspace.
     ///
     /// # Returns
+    ///
     /// The package configurations of each Python workspace member if any.
     fn suggest_packages(&self, dir: &Path) -> anyhow::Result<Vec<PackageConfig>> {
         let filename = &dir.join("pyproject.toml");
@@ -103,7 +108,7 @@ impl BaseStrategy for PythonStrategy {
         let data: Value =
             toml::from_str(&contents).map_err(|err| anyhow!("could not parse `{}`: {err}", filename.display()))?;
 
-        // Try `uv` workspace
+        // Try `uv` workspace.
         if let Some(workspace) = data
             .get("tool")
             .and_then(|tool| tool.get("uv"))
@@ -127,43 +132,60 @@ impl PythonStrategy {
     /// It will reject dynamically versioned projects.
     ///
     /// # Arguments
+    ///
     /// * `filename` - The path to the `pyproject.toml` file.
     /// * `new_version` - The new version to apply.
+    /// * `dry_run` - If true, do not actually write the changes.
     ///
     /// # Returns
+    ///
     /// A result of whether the update was successful.
-    fn write_version_to_pyproject_toml(filename: &Path, new_version: &Version) -> anyhow::Result<()> {
+    fn write_version_to_pyproject_toml(filename: &Path, new_version: &Version, dry_run: bool) -> anyhow::Result<()> {
         let contents =
             fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
         let mut data = contents
             .parse::<DocumentMut>()
             .map_err(|err| anyhow!("could not parse `{}`: {err}", filename.display()))?;
 
-        // `project.version`
+        // `project.version`.
         if let Some(project) = data["project"].as_table_mut() {
-            project["version"] = toml_edit::value(new_version.to_string());
-            fs::write(filename, data.to_string())
-                .map_err(|err| anyhow!("failed to write `[project.version]` to `{}`: {err}", filename.display()))?;
-            debug!("set `[project.version]` to `{new_version}` at `{}`", filename.display());
+            if !dry_run {
+                project["version"] = toml_edit::value(new_version.to_string());
+                fs::write(filename, data.to_string())
+                    .map_err(|err| anyhow!("failed to write `[project.version]` to `{}`: {err}", filename.display()))?;
+                debug!("set `[project.version]` to `{new_version}` at `{}`", filename.display());
+            } else {
+                debug!(
+                    "set `[project.version]` to `{new_version}` at `{}` (dry run)",
+                    filename.display()
+                );
+            }
             return Ok(());
         }
 
-        // `tool.poetry.version`
+        // `tool.poetry.version`.
         if let Some(poetry) = data["tool"]
             .as_table_mut()
             .and_then(|tool| tool["poetry"].as_table_mut())
         {
-            poetry["version"] = toml_edit::value(new_version.to_string());
-            fs::write(filename, data.to_string()).map_err(|err| {
-                anyhow!(
-                    "failed to write `[tool.poetry.version]` to `{}`: {err}",
+            if !dry_run {
+                poetry["version"] = toml_edit::value(new_version.to_string());
+                fs::write(filename, data.to_string()).map_err(|err| {
+                    anyhow!(
+                        "failed to write `[tool.poetry.version]` to `{}`: {err}",
+                        filename.display()
+                    )
+                })?;
+                debug!(
+                    "set `[tool.poetry.version]` to `{new_version}` at `{}`",
                     filename.display()
-                )
-            })?;
-            debug!(
-                "set `[tool.poetry.version]` to `{new_version}` at `{}`",
-                filename.display()
-            );
+                );
+            } else {
+                debug!(
+                    "set `[tool.poetry.version]` to `{new_version}` at `{}` (dry run)",
+                    filename.display()
+                );
+            }
             return Ok(());
         }
 
@@ -176,12 +198,15 @@ impl PythonStrategy {
     /// Writes a new version to the given `setup.py` file.
     ///
     /// # Arguments
+    ///
     /// * `filename` - The path to the `setup.py` file.
     /// * `new_version` - The new version to apply.
+    /// * `dry_run` - If true, do not actually write the changes.
     ///
     /// # Returns
+    ///
     /// A result of whether the update was successful.
-    fn write_version_to_setup_py(filename: &Path, new_version: &Version) -> anyhow::Result<()> {
+    fn write_version_to_setup_py(filename: &Path, new_version: &Version, dry_run: bool) -> anyhow::Result<()> {
         let contents =
             fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
 
@@ -190,10 +215,15 @@ impl PythonStrategy {
             format!("{}{}{}", &caps[1], new_version, &caps[3])
         });
 
-        // Check if the contents were actually modified, i.e. got a new `&str` reference
+        // Check if the contents were actually modified, i.e. got a new `&str` reference.
         if let Cow::Owned(new_contents) = new_contents {
-            fs::write(filename, new_contents)
-                .map_err(|err| anyhow!("failed to write `version` to `{}`: {err}", filename.display()))?;
+            if !dry_run {
+                fs::write(filename, new_contents)
+                    .map_err(|err| anyhow!("failed to write `version` to `{}`: {err}", filename.display()))?;
+                debug!("set `version` to `{new_version}` at `{}`", filename.display());
+            } else {
+                debug!("set `version` to `{new_version}` at `{}` (dry run)", filename.display());
+            }
             return Ok(());
         }
 
@@ -204,10 +234,12 @@ impl PythonStrategy {
     /// that should be included.
     ///
     /// # Arguments
+    ///
     /// * `dir` - The directory to a Python workspace.
     /// * `workspace` - The `tool.uv.workspace` TOML value.
     ///
     /// # Returns
+    ///
     /// The package configurations of each Python workspace member if any.
     fn suggest_packages_from_uv_workspace(dir: &Path, workspace: &Value) -> anyhow::Result<Vec<PackageConfig>> {
         let members = workspace
@@ -278,12 +310,12 @@ impl PythonStrategy {
         let data: Value =
             toml::from_str(&content).map_err(|err| anyhow!("could not parse `{}`: {err}", path.display()))?;
 
-        // `project.name`
+        // `project.name`.
         if let Some(name) = data.get("project").and_then(|p| p.get("name")).and_then(|n| n.as_str()) {
             return Ok(Some(name.to_string()));
         }
 
-        // `tool.poetry.name`
+        // `tool.poetry.name`.
         if let Some(name) = data
             .get("tool")
             .and_then(|t| t.get("poetry"))
@@ -569,9 +601,24 @@ setup()"#,
             .write_str("[project]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n")
             .unwrap();
 
-        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0));
+        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0), false);
         assert!(result.is_ok());
         pyproject_toml.assert("[project]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.1.0\"\n");
+    }
+
+    /// Tests that a new version is *not* written to a given `pyproject.toml` file when performing a dry run.
+    #[rstest]
+    fn write_version_to_pyproject_toml_with_dry_run() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let pyproject_toml = temp_dir.child("pyproject.toml");
+        pyproject_toml
+            .write_str("[project]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n")
+            .unwrap();
+
+        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0), true);
+        assert!(result.is_ok());
+        // The version should not be updated because this is a dry run.
+        pyproject_toml.assert("[project]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n");
     }
 
     /// Tests that a new version is written to a given `pyproject.toml` file with a `[tool.poetry]` section.
@@ -583,10 +630,27 @@ setup()"#,
             .write_str("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n")
             .unwrap();
 
-        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0));
+        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0), false);
         assert!(result.is_ok());
         pyproject_toml
             .assert("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.1.0\"\n");
+    }
+
+    /// Tests that a new version is *not* written to a given `pyproject.toml` file with a `[tool.poetry]` section
+    /// when performing a dry run.
+    #[rstest]
+    fn write_version_to_pyproject_toml_with_poetry_and_dry_run() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let pyproject_toml = temp_dir.child("pyproject.toml");
+        pyproject_toml
+            .write_str("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n")
+            .unwrap();
+
+        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0), true);
+        assert!(result.is_ok());
+        // The version should not be updated because this is a dry run.
+        pyproject_toml
+            .assert("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n");
     }
 
     /// Tests that a new version cannot be written to a `pyproject.toml` file with an unknown structure.
@@ -598,7 +662,7 @@ setup()"#,
             .write_str("[something]\nname = \"magic\"\n# no version\n")
             .unwrap();
 
-        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0));
+        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0), false);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -622,12 +686,35 @@ setup(name="foo", version="1.0.0", py_modules=["foo"])"#,
             )
             .unwrap();
 
-        let result = PythonStrategy::write_version_to_setup_py(&setup_py, &Version::new(1, 1, 0));
+        let result = PythonStrategy::write_version_to_setup_py(&setup_py, &Version::new(1, 1, 0), false);
         assert!(result.is_ok());
         setup_py.assert(
             r#"#!/usr/bin/env python
 from distutils.core import setup
 setup(name="foo", version="1.1.0", py_modules=["foo"])"#,
+        );
+    }
+
+    /// Tests that a new version is *not* written to a given `setup.py` file when performing a dry run.
+    #[rstest]
+    fn write_version_to_setup_py_with_dry_run() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let setup_py = temp_dir.child("setup.py");
+        setup_py
+            .write_str(
+                r#"#!/usr/bin/env python
+from distutils.core import setup
+setup(name="foo", version="1.0.0", py_modules=["foo"])"#,
+            )
+            .unwrap();
+
+        let result = PythonStrategy::write_version_to_setup_py(&setup_py, &Version::new(1, 1, 0), true);
+        assert!(result.is_ok());
+        // The version should not be updated because this is a dry run.
+        setup_py.assert(
+            r#"#!/usr/bin/env python
+from distutils.core import setup
+setup(name="foo", version="1.0.0", py_modules=["foo"])"#,
         );
     }
 
@@ -644,7 +731,7 @@ setup(name="foo", py_modules=["foo"])"#,
             )
             .unwrap();
 
-        let result = PythonStrategy::write_version_to_setup_py(&setup_py, &Version::new(1, 1, 0));
+        let result = PythonStrategy::write_version_to_setup_py(&setup_py, &Version::new(1, 1, 0), false);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),

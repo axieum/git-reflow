@@ -37,7 +37,8 @@ pub trait BaseStrategy {
     ///
     /// * `new_version` - The new version to apply.
     /// * `config` - The package configuration.
-    fn write_version(&self, new_version: &Version, config: &PackageConfig) -> anyhow::Result<()>;
+    /// * `dry_run` - If true, do not actually write the changes.
+    fn write_version(&self, new_version: &Version, config: &PackageConfig, dry_run: bool) -> anyhow::Result<()>;
 
     /// Suggests the package name from the project files.
     ///
@@ -63,11 +64,11 @@ pub trait BaseStrategy {
 }
 
 impl BaseStrategy for Strategy {
-    fn write_version(&self, new_version: &Version, config: &PackageConfig) -> anyhow::Result<()> {
+    fn write_version(&self, new_version: &Version, config: &PackageConfig, dry_run: bool) -> anyhow::Result<()> {
         match self {
-            Strategy::Basic(strategy) => strategy.write_version(new_version, config),
-            Strategy::Python(strategy) => strategy.write_version(new_version, config),
-            Strategy::Rust(strategy) => strategy.write_version(new_version, config),
+            Strategy::Basic(strategy) => strategy.write_version(new_version, config, dry_run),
+            Strategy::Python(strategy) => strategy.write_version(new_version, config, dry_run),
+            Strategy::Rust(strategy) => strategy.write_version(new_version, config, dry_run),
         }
     }
 

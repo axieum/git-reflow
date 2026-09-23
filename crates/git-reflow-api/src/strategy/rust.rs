@@ -23,11 +23,18 @@ impl BaseStrategy for RustStrategy {
     ///
     /// * `new_version` - The new version to apply.
     /// * `config` - The package configuration.
-    fn write_version(&self, new_version: &Version, config: &PackageConfig) -> anyhow::Result<()> {
+    /// * `dry_run` - If true, do not actually write the changes.
+    fn write_version(&self, new_version: &Version, config: &PackageConfig, dry_run: bool) -> anyhow::Result<()> {
         // Update the `Cargo.toml` file
-        if Self::write_version_to_cargo_toml(&config.dir.join("Cargo.toml"), new_version)? {
+        if Self::write_version_to_cargo_toml(&config.dir.join("Cargo.toml"), new_version, dry_run)? {
             // Update the `Cargo.lock` file
-            Self::write_version_to_cargo_lock(&std::env::current_dir()?, &config.dir, config.name(), new_version)?;
+            Self::write_version_to_cargo_lock(
+                &std::env::current_dir()?,
+                &config.dir,
+                config.name(),
+                new_version,
+                dry_run,
+            )?;
         }
         Ok(())
     }
@@ -37,9 +44,11 @@ impl BaseStrategy for RustStrategy {
     /// For a Cargo workspace, it will return the directory name.
     ///
     /// # Arguments
+    ///
     /// * `dir` - The package directory to get the name for.
     ///
     /// # Returns
+    ///
     /// The package name for the given Rust project.
     fn suggest_name(&self, dir: &Path) -> anyhow::Result<String> {
         let filename = &dir.join("Cargo.toml");
@@ -67,9 +76,11 @@ impl BaseStrategy for RustStrategy {
     /// Suggests Cargo workspace members as package configurations that should be included.
     ///
     /// # Arguments
+    ///
     /// * `dir` - The directory to a *possible* Cargo workspace.
     ///
     /// # Returns
+    ///
     /// The package configurations of each Cargo workspace member if any.
     fn suggest_packages(&self, dir: &Path) -> anyhow::Result<Vec<PackageConfig>> {
         let filename = &dir.join("Cargo.toml");
@@ -134,12 +145,15 @@ impl RustStrategy {
     /// Writes a new version to the given `Cargo.toml` file.
     ///
     /// # Arguments
+    ///
     /// * `filename` - The path to the `Cargo.toml` file.
     /// * `new_version` - The new version to apply.
+    /// * `dry_run` - If true, do not actually write the changes.
     ///
     /// # Returns
+    ///
     /// A result of whether an update was made.
-    fn write_version_to_cargo_toml(filename: &Path, new_version: &Version) -> anyhow::Result<bool> {
+    fn write_version_to_cargo_toml(filename: &Path, new_version: &Version, dry_run: bool) -> anyhow::Result<bool> {
         let contents =
             fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
         let mut data = contents
@@ -147,10 +161,17 @@ impl RustStrategy {
             .map_err(|err| anyhow!("could not parse `{}`: {err}", filename.display()))?;
 
         if let Some(package) = data["package"].as_table_mut() {
-            package["version"] = toml_edit::value(new_version.to_string());
-            fs::write(filename, data.to_string())
-                .map_err(|err| anyhow!("failed to write `[package.version]` to `{}`: {err}", filename.display()))?;
-            debug!("set `[package.version]` to `{new_version}` at `{}`", filename.display());
+            if !dry_run {
+                package["version"] = toml_edit::value(new_version.to_string());
+                fs::write(filename, data.to_string())
+                    .map_err(|err| anyhow!("failed to write `[package.version]` to `{}`: {err}", filename.display()))?;
+                debug!("set `[package.version]` to `{new_version}` at `{}`", filename.display());
+            } else {
+                debug!(
+                    "set `[package.version]` to `{new_version}` at `{}` (dry run)",
+                    filename.display()
+                );
+            }
             Ok(true)
         } else {
             debug!(
@@ -166,17 +187,27 @@ impl RustStrategy {
     /// It will find the closest `Cargo.lock` file from a given package directory upwards.
     ///
     /// # Arguments
+    ///
     /// * `root` - The root directory.
     /// * `dir` - The package directory.
     /// * `name` - The name of the package to update.
     /// * `new_version` - The new version to apply.
+    /// * `dry_run` - If true, do not actually write the changes.
     ///
     /// # Returns
+    ///
     /// A result of whether the update was successful.
     ///
     /// # See Also
+    ///
     /// * [`Self::find_cargo_lock()`] - For finding the closest `Cargo.lock` file.
-    fn write_version_to_cargo_lock(root: &Path, dir: &Path, name: &str, new_version: &Version) -> anyhow::Result<()> {
+    fn write_version_to_cargo_lock(
+        root: &Path,
+        dir: &Path,
+        name: &str,
+        new_version: &Version,
+        dry_run: bool,
+    ) -> anyhow::Result<()> {
         let lockfile = Self::find_cargo_lock(dir, root)?;
         let lockfile_display = lockfile.strip_prefix(root)?.display();
         let contents =
@@ -195,10 +226,14 @@ impl RustStrategy {
             })
             .context(format!("package `{name}` not found in `{}`", lockfile_display))?;
 
-        package["version"] = toml_edit::value(new_version.to_string());
-        fs::write(&lockfile, data.to_string())
-            .map_err(|err| anyhow!("failed to write `[[package.version]]` to `{lockfile_display}`: {err}"))?;
-        debug!("set `[[package]] version` to `{new_version}` for `{name}` at `{lockfile_display}`");
+        if !dry_run {
+            package["version"] = toml_edit::value(new_version.to_string());
+            fs::write(&lockfile, data.to_string())
+                .map_err(|err| anyhow!("failed to write `[[package.version]]` to `{lockfile_display}`: {err}"))?;
+            debug!("set `[[package]] version` to `{new_version}` for `{name}` at `{lockfile_display}`");
+        } else {
+            debug!("set `[[package]] version` to `{new_version}` for `{name}` at `{lockfile_display}` (dry run)");
+        }
 
         Ok(())
     }
@@ -208,10 +243,12 @@ impl RustStrategy {
     /// This will not traverse any further than the given `relative` directory.
     ///
     /// # Arguments
+    ///
     /// * `dir` - The package directory.
     /// * `relative` - The relative directory to scope the search to, e.g. [`std::env::current_dir()`].
     ///
     /// # Returns
+    ///
     /// A result containing the `Cargo.lock` path if found.
     pub fn find_cargo_lock(dir: &Path, relative: &Path) -> anyhow::Result<PathBuf> {
         let mut dir = relative.join(dir);
@@ -375,7 +412,7 @@ mod tests {
             .write_str("[package]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n")
             .unwrap();
 
-        let result = RustStrategy::write_version_to_cargo_toml(&cargo_toml, &Version::new(1, 1, 0));
+        let result = RustStrategy::write_version_to_cargo_toml(&cargo_toml, &Version::new(1, 1, 0), false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), true);
         cargo_toml.assert("[package]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.1.0\"\n");
@@ -390,10 +427,26 @@ mod tests {
             .write_str("[workspace]\nresolver = \"2\"\nmembers = [\"crates/*\"]")
             .unwrap();
 
-        let result = RustStrategy::write_version_to_cargo_toml(&cargo_toml, &Version::new(1, 1, 0));
+        let result = RustStrategy::write_version_to_cargo_toml(&cargo_toml, &Version::new(1, 1, 0), false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), false);
         cargo_toml.assert("[workspace]\nresolver = \"2\"\nmembers = [\"crates/*\"]");
+    }
+
+    /// Tests that a new version is *not* written to a given `Cargo.toml` file when performing a dry run.
+    #[rstest]
+    fn write_version_to_cargo_toml_with_dry_run() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let cargo_toml = temp_dir.child("Cargo.toml");
+        cargo_toml
+            .write_str("[package]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n")
+            .unwrap();
+
+        let result = RustStrategy::write_version_to_cargo_toml(&cargo_toml, &Version::new(1, 1, 0), true);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+        // The version should not be updated because this is a dry run.
+        cargo_toml.assert("[package]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n");
     }
 
     /// Tests that a new version is written to a package's `Cargo.lock` file.
@@ -405,7 +458,8 @@ mod tests {
         crate_a.create_dir_all().unwrap();
         lockfile.write_str("# This file is automatically @generated by Cargo.\n[[package]]\nname = \"crate-a\"\nversion = \"1.0.0\"\n").unwrap();
 
-        let result = RustStrategy::write_version_to_cargo_lock(&temp_dir, &crate_a, "crate-a", &Version::new(1, 1, 0));
+        let result =
+            RustStrategy::write_version_to_cargo_lock(&temp_dir, &crate_a, "crate-a", &Version::new(1, 1, 0), false);
         assert!(result.is_ok());
         lockfile.assert(
             "# This file is automatically @generated by Cargo.\n[[package]]\nname = \"crate-a\"\nversion = \"1.1.0\"\n",
@@ -419,11 +473,30 @@ mod tests {
         let lockfile = temp_dir.child("Cargo.lock");
         lockfile.write_str("# This file is automatically @generated by Cargo.\n[[package]]\nname = \"crate-a\"\nversion = \"1.0.0\"").unwrap();
 
-        let result = RustStrategy::write_version_to_cargo_lock(&temp_dir, &temp_dir, "unknown", &Version::new(1, 1, 0));
+        let result =
+            RustStrategy::write_version_to_cargo_lock(&temp_dir, &temp_dir, "unknown", &Version::new(1, 1, 0), false);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
             "package `unknown` not found in `Cargo.lock`"
+        );
+    }
+
+    /// Tests that a new version is *not* written to a package's `Cargo.lock` file when performing a dry run.
+    #[rstest]
+    fn write_version_to_cargo_lock_with_dry_run() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let lockfile = temp_dir.child("Cargo.lock");
+        let crate_a = temp_dir.child("crates/a");
+        crate_a.create_dir_all().unwrap();
+        lockfile.write_str("# This file is automatically @generated by Cargo.\n[[package]]\nname = \"crate-a\"\nversion = \"1.0.0\"\n").unwrap();
+
+        let result =
+            RustStrategy::write_version_to_cargo_lock(&temp_dir, &crate_a, "crate-a", &Version::new(1, 1, 0), true);
+        assert!(result.is_ok());
+        // The version should not be updated because this is a dry run.
+        lockfile.assert(
+            "# This file is automatically @generated by Cargo.\n[[package]]\nname = \"crate-a\"\nversion = \"1.0.0\"\n",
         );
     }
 
