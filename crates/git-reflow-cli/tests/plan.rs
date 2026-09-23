@@ -84,3 +84,46 @@ fn test_plan_command_with_scope(#[with("example-python-uv-workspace")] project_r
         insta::assert_snapshot!(String::from_utf8_lossy(&assert.get_output().stdout));
     });
 }
+
+/// Tests that the `plan` command allows outputting the `git-cliff` context.
+#[rstest]
+fn test_plan_command_with_show_context(#[with("example-rust-workspace")] project_repo: (TempDir, Repository)) {
+    let (project_dir, repo) = project_repo;
+
+    // Commit the current files to the `main` branch.
+    repo.set_head("refs/heads/main").unwrap();
+    git_reflow_api::git::commit(&repo, &["."], "chore: initial commit").unwrap();
+
+    // Create Git tags for the current versions of the packages.
+    let commit = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.tag_lightweight("v1.0.0", commit.as_object(), false).unwrap();
+    repo.tag_lightweight("example-api-v1.0.0", commit.as_object(), false)
+        .unwrap();
+    repo.tag_lightweight("example-cli-v1.0.0", commit.as_object(), false)
+        .unwrap();
+
+    // Create some changes in the packages and commit those changes.
+    let lib_rs_path = project_dir.path().join("crates/example-api/src/lib.rs");
+    writeln!(
+        fs::OpenOptions::new().append(true).open(&lib_rs_path).unwrap(),
+        "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
+    )
+    .unwrap();
+    git_reflow_api::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+
+    // Run the `plan` command, showing the `git-cliff` context.
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let assert = cmd
+        .current_dir(&project_dir)
+        .arg("plan")
+        .arg("--show-context")
+        .assert()
+        .success();
+
+    // Parse the output as JSON and assert that the `context` field is present for each package release.
+    let json: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    assert!(json[0]["context"].is_object());
+    assert!(json[0]["context"]["commits"].is_array());
+    assert!(json[1]["context"].is_object());
+    assert!(json[1]["context"]["commits"].is_array());
+}
