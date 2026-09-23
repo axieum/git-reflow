@@ -39,7 +39,13 @@ pub struct PackageConfig {
     /// The changelog path relative to the package directory.
     ///
     /// **Default:** `CHANGELOG.md`
+    #[serde(default = "default_changelog_path")]
     pub changelog_path: Option<String>,
+}
+
+/// Returns the default value for `$.changelog_path`.
+fn default_changelog_path() -> Option<String> {
+    Some(String::from("CHANGELOG.md"))
 }
 
 impl Default for PackageConfig {
@@ -82,11 +88,9 @@ impl PackageConfig {
         self.strategy.as_ref().unwrap()
     }
 
-    /// Returns the path to the package's changelog file.
-    pub fn changelog_path(&self) -> PathBuf {
-        self.changelog_path
-            .as_ref()
-            .map_or(self.dir.join("CHANGELOG.md"), |c| self.dir.join(c))
+    /// Returns the effective path to the package's changelog file relative to the root.
+    pub fn changelog_path(&self) -> Option<PathBuf> {
+        self.changelog_path.as_ref().map(|c| self.dir.join(c))
     }
 
     /// Applies default values to missing configuration options.
@@ -127,6 +131,13 @@ For further assistance, run `git reflow --help` or visit https://github.com/axie
             trace!("default package scope to `{}` in `{}`", self.name(), self.dir.display());
         }
 
+        // If the changelog path blank, clear it to disable changelog generation for this package.
+        if let Some(changelog_path) = &self.changelog_path
+            && changelog_path.trim().is_empty()
+        {
+            self.changelog_path = None;
+        }
+
         Ok(self)
     }
 }
@@ -156,7 +167,7 @@ mod tests {
         assert_eq!(config.strategy, None);
         assert!(config.workspace);
         assert!(config.include_name_in_tag);
-        assert_eq!(config.changelog_path(), PathBuf::from(".").join("CHANGELOG.md"));
+        assert_eq!(config.changelog_path(), Some(PathBuf::from(".").join("CHANGELOG.md")));
     }
 
     /// Tests that the package directory is always serialised with forward slashes, regardless of platform.
@@ -196,8 +207,46 @@ mod tests {
         assert!(!config.include_name_in_tag);
         assert_eq!(
             config.changelog_path(),
-            PathBuf::from("packages/api").join("docs/changes.md")
+            Some(PathBuf::from("packages/api").join("docs/changes.md"))
         );
+    }
+
+    /// Tests that a changelog path of [`None`] is deserialized correctly and disables the effective changelog path.
+    #[test]
+    fn changelog_path_is_none_when_explicitly_null() {
+        let config: PackageConfig = serde_json::from_str(
+            r#"{
+                "dir": "packages/api",
+                "name": "api",
+                "strategy": "basic",
+                "workspace": false,
+                "include-name-in-tag": false,
+                "changelog-path": null
+            }"#,
+        )
+        .unwrap();
+        let config = config.apply_defaults().unwrap();
+
+        assert_eq!(config.changelog_path(), None);
+    }
+
+    /// Tests that an empty changelog path is deserialized correctly and disables the effective changelog path.
+    #[test]
+    fn changelog_path_is_none_when_explicitly_blank() {
+        let config: PackageConfig = serde_json::from_str(
+            r#"{
+                "dir": "packages/api",
+                "name": "api",
+                "strategy": "basic",
+                "workspace": false,
+                "include-name-in-tag": false,
+                "changelog-path": ""
+            }"#,
+        )
+        .unwrap();
+        let config = config.apply_defaults().unwrap();
+
+        assert_eq!(config.changelog_path(), None);
     }
 
     /// Tests that the conventional commit scope defaults to the package name for non-root packages.
