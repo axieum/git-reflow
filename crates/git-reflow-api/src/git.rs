@@ -1,6 +1,25 @@
-use anyhow::{Context, anyhow, bail};
-use git2::Repository;
+use anyhow::{Context, anyhow, bail, ensure};
+use git2::{Repository, StatusOptions};
 use tracing::{debug, error, warn};
+
+/// Ensures that the Git working directory is clean (no uncommitted changes).
+///
+/// # Arguments
+///
+/// - `repo` - The Git repository to check.
+///
+/// # Returns
+///
+/// An error if the working directory is not clean, otherwise okay.
+pub fn ensure_clean_working_directory(repo: &Repository) -> anyhow::Result<()> {
+    let dirty_files = get_dirty_files(repo)?;
+    ensure!(
+        dirty_files.is_empty(),
+        "working directory is not clean - please commit or stash your changes first:\n  {}",
+        dirty_files.join("\n  ")
+    );
+    Ok(())
+}
 
 /// Returns a list of files with uncommitted changes in the working directory.
 ///
@@ -18,7 +37,11 @@ use tracing::{debug, error, warn};
 /// Returns an error if the repository status cannot be determined.
 pub fn get_dirty_files(repo: &Repository) -> anyhow::Result<Vec<String>> {
     Ok(repo
-        .statuses(None)
+        .statuses(Some(
+            StatusOptions::new()
+                .include_untracked(false)
+                .include_ignored(false),
+        ))
         .context("failed to get Git repository status")?
         .iter()
         .filter_map(|entry| entry.path().map(|status| status.to_string()).ok())
@@ -296,7 +319,7 @@ mod tests {
     use git2::Signature;
     use rstest::rstest;
 
-    /// Tests that package names are sanitized for use in Git branch names.
+    /// Tests that package names are sanitised for use in Git branch names.
     #[rstest]
     #[case::special_chars("my/package@1.0", "my-package-1.0")]
     #[case::scoped_package("@scope/pkg", "scope-pkg")]
@@ -307,11 +330,32 @@ mod tests {
         assert_eq!(sanitize_branch_name(branch_name), expected);
     }
 
-    /// Tests that dirty files include both modified tracked files and untracked files.
+    /// Tests that a clean working directory passes.
     #[test]
-    fn test_get_dirty_files_returns_modified_and_untracked_files() {
-        // Create a git repository.
+    fn test_ensure_clean_working_directory_when_clean() {
+        // Create a Git repository.
         let (temp_dir, repo) = create_test_repo();
+
+        // Commit tracked files.
+        temp_dir.child("clean.txt").write_str("clean content").unwrap();
+        commit(&repo, &["clean.txt"], "feat: add clean.txt").unwrap();
+        temp_dir.child("tracked.txt").write_str("initial content").unwrap();
+        commit(&repo, &["tracked.txt"], "feat: add tracked.txt").unwrap();
+
+        // Verify that a clean working directory passes.
+        let result = ensure_clean_working_directory(&repo);
+        assert!(result.is_ok(), "unexpected error: {:?}", result.unwrap_err());
+    }
+
+    /// Tests that a dirty working directory returns an error with the dirty files.
+    #[test]
+    fn test_ensure_clean_working_directory_when_dirty() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+
+        // Add a `.gitignore` file.
+        temp_dir.child(".gitignore").write_str("ignored.txt\n").unwrap();
+        commit(&repo, &[".gitignore"], "chore: add gitignore").unwrap();
 
         // Commit tracked files.
         temp_dir.child("clean.txt").write_str("clean content").unwrap();
@@ -322,22 +366,50 @@ mod tests {
         // Write some changes to the filesystem.
         temp_dir.child("tracked.txt").write_str("updated content").unwrap();
         temp_dir.child("untracked.txt").write_str("untracked content").unwrap();
+        temp_dir.child("ignored.txt").write_str("ignored content").unwrap();
+
+        // Verify that an error is returned with the dirty files.
+        let result = ensure_clean_working_directory(&repo);
+        assert!(result.is_err(), "expected error but got ok");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "working directory is not clean - please commit or stash your changes first:\n  tracked.txt"
+        );
+    }
+
+    /// Tests that dirty files include only modified files, excluding untracked and ignored files.
+    #[test]
+    fn test_get_dirty_files_returns_modified_files() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+
+        // Add a `.gitignore` file.
+        temp_dir.child(".gitignore").write_str("ignored.txt\n").unwrap();
+        commit(&repo, &[".gitignore"], "chore: add gitignore").unwrap();
+
+        // Commit tracked files.
+        temp_dir.child("clean.txt").write_str("clean content").unwrap();
+        commit(&repo, &["clean.txt"], "feat: add clean.txt").unwrap();
+        temp_dir.child("tracked.txt").write_str("initial content").unwrap();
+        commit(&repo, &["tracked.txt"], "feat: add tracked.txt").unwrap();
+
+        // Write some changes to the filesystem.
+        temp_dir.child("tracked.txt").write_str("updated content").unwrap();
+        temp_dir.child("untracked.txt").write_str("untracked content").unwrap();
+        temp_dir.child("ignored.txt").write_str("ignored content").unwrap();
 
         // Verify that the dirty files are expected.
         let mut dirty_files = get_dirty_files(&repo).unwrap();
         dirty_files.sort();
 
         assert!(!dirty_files.contains(&"clean.txt".to_string()));
-        assert_eq!(
-            dirty_files,
-            vec!["tracked.txt".to_string(), "untracked.txt".to_string()]
-        );
+        assert_eq!(dirty_files, vec!["tracked.txt".to_string()]);
     }
 
     /// Tests that files are committed correctly and the new commit exists in the repository.
     #[test]
     fn test_commit() {
-        // Create a git repository.
+        // Create a Git repository.
         let (temp_dir, repo) = create_test_repo();
 
         // Create a new file and commit it.
@@ -388,7 +460,7 @@ mod tests {
     /// Tests that the Git `origin` remote is parsed correctly.
     #[test]
     fn test_get_origin_remote() {
-        // Create a git repository with an `origin` remote URL.
+        // Create a Git repository with an `origin` remote URL.
         let (_temp_dir, repo) = create_test_repo();
         repo.remote("origin", "git@github.com:axieum/git-reflow.git").unwrap();
 
@@ -402,7 +474,7 @@ mod tests {
     /// Tests that the Git `origin` remote returns `None` if it does not exist.
     #[test]
     fn test_get_origin_remote_when_none() {
-        // Create a git repository without an `origin` remote URL.
+        // Create a Git repository without an `origin` remote URL.
         let (_temp_dir, repo) = create_test_repo();
 
         // Verify that the parsed remote is `None`.
@@ -413,7 +485,7 @@ mod tests {
     /// Tests that a `BranchGuard` restores the repository state when dropped without disarming.
     #[test]
     fn test_branch_guard_restores_on_drop() {
-        // Create a git repository.
+        // Create a Git repository.
         let (temp_dir, repo) = create_test_repo();
         let initial_head = repo.head().unwrap();
         let initial_branch = initial_head.shorthand().unwrap().to_string();
@@ -446,7 +518,7 @@ mod tests {
     /// Tests that a `BranchGuard` does not restore when disarmed.
     #[test]
     fn test_branch_guard_disarm_prevents_restoration() {
-        // Create a git repository.
+        // Create a Git repository.
         let (temp_dir, repo) = create_test_repo();
 
         // Create a branch guard from the current HEAD.
@@ -484,7 +556,7 @@ mod tests {
     /// Tests that a `BranchGuard` restores state when an error occurs mid-operation.
     #[test]
     fn test_branch_guard_restores_on_error() {
-        // Create a git repository.
+        // Create a Git repository.
         let (_temp_dir, repo) = create_test_repo();
         let initial_head = repo.head().unwrap();
         let initial_branch = initial_head.shorthand().unwrap().to_string();
