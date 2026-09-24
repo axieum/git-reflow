@@ -38,9 +38,7 @@ pub fn ensure_clean_working_directory(repo: &Repository) -> anyhow::Result<()> {
 pub fn get_dirty_files(repo: &Repository) -> anyhow::Result<Vec<String>> {
     Ok(repo
         .statuses(Some(
-            StatusOptions::new()
-                .include_untracked(false)
-                .include_ignored(false),
+            StatusOptions::new().include_untracked(false).include_ignored(false),
         ))
         .context("failed to get Git repository status")?
         .iter()
@@ -48,37 +46,46 @@ pub fn get_dirty_files(repo: &Repository) -> anyhow::Result<Vec<String>> {
         .collect::<Vec<_>>())
 }
 
-/// Sanitises a package name into a valid Git branch name by:
+/// Builds a valid Git branch name and prepends the given prefix.
 ///
 ///   * Replacing non-alphanumeric characters with dashes;
 ///   * Collapsing multiple dashes into one;
-///   * Removing leading/trailing dashes.
+///   * Removing leading/trailing dashes;
+///   * Converting to lowercase;
+///   * Prepending the given prefix verbatim.
 ///
 /// # Arguments
 ///
-/// * `pkg_name` - The package name to sanitise.
+/// * `prefix` - The prefix to prepend to the branch name.
+/// * `name` - The name to sanitise.
 ///
 /// # Returns
 ///
-/// The valid Git branch name for the given package name.
-pub fn sanitize_branch_name(pkg_name: &str) -> String {
-    pkg_name
-        // Replace non-alphanumeric characters with dashes
+/// A result containing a valid Git branch name for the given name, or an error if the name would be empty.
+pub fn build_branch_name(prefix: &str, name: &str) -> anyhow::Result<String> {
+    // Sanitise the branch name.
+    let branch = name
+        // Replace non-alphanumeric characters with dashes.
         .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '.' {
-                c
-            } else {
-                '-'
-            }
-        })
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
         .collect::<String>()
-        // Collapse multiple dashes into one
+        // Collapse multiple dashes into one.
         .split('-')
-        // Trim leading/trailing dashes
+        // Trim leading/trailing dashes.
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-")
+        // Convert to lowercase.
+        .to_lowercase();
+
+    // If the resulting branch name is empty, return an error.
+    ensure!(
+        !branch.is_empty(),
+        "the name `{}` would result in an empty branch name",
+        name
+    );
+
+    Ok(format!("{}{}", prefix, branch))
 }
 
 /// Creates a branch at the given commit, overwriting any existing local branch.
@@ -354,15 +361,31 @@ mod tests {
     use git2::Signature;
     use rstest::rstest;
 
-    /// Tests that package names are sanitised for use in Git branch names.
+    /// Tests that anticipated branch names are sanitised for use in Git branch names.
     #[rstest]
-    #[case::special_chars("my/package@1.0", "my-package-1.0")]
+    #[case::uppercase("my-BRANCH-nAmE", "my-branch-name")]
+    #[case::special_chars("my/package@1.0", "my-package-1-0")]
     #[case::scoped_package("@scope/pkg", "scope-pkg")]
     #[case::multiple_dashes("multiple---dashes", "multiple-dashes")]
     #[case::leading_trailing_dashes("-leading--and-trailing-", "leading-and-trailing")]
+    #[case::multiple_dots("release..candidate", "release-candidate")]
+    #[case::leading_trailing_dots("...release.", "release")]
     #[case::complex_chars("my--weird*^branch----!~!-na*me", "my-weird-branch-na-me")]
-    fn test_sanitize_branch_name(#[case] branch_name: &str, #[case] expected: &str) {
-        assert_eq!(sanitize_branch_name(branch_name), expected);
+    fn test_build_branch_name(#[case] name: &str, #[case] expected: &str) {
+        let branch = build_branch_name("reflow-branches--", name).unwrap();
+        assert_eq!(branch, format!("reflow-branches--{}", expected));
+        assert!(git2::Reference::is_valid_name(&format!(
+            "refs/heads/reflow-branches--{branch}"
+        )));
+    }
+
+    /// Tests that invalid branch names return an error when they cannot be sanitised.
+    #[rstest]
+    #[case::empty("")]
+    #[case::all_invalid_chars("@/.")]
+    fn test_build_branch_name_when_invalid(#[case] name: &str) {
+        let branch_name = build_branch_name("reflow-branches--", name);
+        assert!(branch_name.is_err(), "expected error, got: {:?}", branch_name.unwrap());
     }
 
     /// Tests that a clean working directory passes.
@@ -476,7 +499,10 @@ mod tests {
         // Verify that the new branch was created and checked out.
         assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
         assert_eq!(repo.head().unwrap().target(), Some(base_commit));
-        assert_eq!(std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(), "base");
+        assert_eq!(
+            std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(),
+            "base"
+        );
         assert!(repo.statuses(None).unwrap().is_empty());
     }
 
@@ -501,7 +527,10 @@ mod tests {
         // Verify that the branch was overwritten.
         assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
         assert_eq!(repo.head().unwrap().target(), Some(base_commit));
-        assert_eq!(std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(), "base");
+        assert_eq!(
+            std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(),
+            "base"
+        );
         assert!(repo.statuses(None).unwrap().is_empty());
     }
 
@@ -526,7 +555,10 @@ mod tests {
         // Verify that the currently checked out branch was reset.
         assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
         assert_eq!(repo.head().unwrap().target(), Some(base_commit));
-        assert_eq!(std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(), "base");
+        assert_eq!(
+            std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(),
+            "base"
+        );
         assert!(repo.statuses(None).unwrap().is_empty());
     }
 
