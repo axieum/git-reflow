@@ -81,6 +81,41 @@ pub fn sanitize_branch_name(pkg_name: &str) -> String {
         .join("-")
 }
 
+/// Creates a branch at the given commit, overwriting any existing local branch.
+///
+/// # Arguments
+///
+/// - `repo` - The Git repository to create the branch in.
+/// - `name` - The name of the branch to create.
+/// - `commit_id` - The commit ID to create the branch at.
+///
+/// # Returns
+///
+/// A result of whether the branch was created successfully or not.
+pub fn create_or_reset_branch(repo: &Repository, name: &str, commit_id: git2::Oid) -> anyhow::Result<()> {
+    // Resolve the commit and branch reference.
+    let commit = repo.find_commit(commit_id).context("failed to find base commit")?;
+    let branch_ref = format!("refs/heads/{name}");
+
+    // If the branch already exists and is checked out, reset it to the given commit.
+    let head = repo.head().context("failed to get repository HEAD")?;
+    if head.name().context("failed to resolve repository HEAD")? == branch_ref {
+        repo.reset(commit.as_object(), git2::ResetType::Hard, None)
+            .with_context(|| format!("could not reset branch `{name}`"))?;
+        return Ok(());
+    }
+
+    // Otherwise, create or overwrite the branch at the given commit and check it out.
+    repo.branch(name, &commit, true)
+        .with_context(|| format!("could not create branch `{name}`"))?;
+    repo.checkout_tree(commit.as_object(), Some(git2::build::CheckoutBuilder::new().force()))
+        .with_context(|| format!("could not checkout branch `{name}`"))?;
+    repo.set_head(&branch_ref)
+        .with_context(|| format!("could not move HEAD to `{name}`"))?;
+
+    Ok(())
+}
+
 /// Stages and commits the specified changes in the Git repository.
 ///
 /// # Arguments
@@ -420,6 +455,79 @@ mod tests {
         let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
         assert_eq!(head_commit.id(), commit_id);
         assert!(repo.find_commit(commit_id).is_ok());
+    }
+
+    /// Tests that a new branch is created.
+    #[test]
+    fn test_create_or_reset_branch() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+
+        // Create a base and latest commit.
+        // NB: We'll create a new branch at the base commit, so the later commit shouldn't exist on the new branch.
+        temp_dir.child("tracked.txt").write_str("base").unwrap();
+        let base_commit = commit(&repo, &["tracked.txt"], "base").unwrap();
+        temp_dir.child("tracked.txt").write_str("latest").unwrap();
+        commit(&repo, &["tracked.txt"], "latest").unwrap();
+
+        // Create a new branch at the base commit.
+        create_or_reset_branch(&repo, "feature", base_commit).unwrap();
+
+        // Verify that the new branch was created and checked out.
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
+        assert_eq!(repo.head().unwrap().target(), Some(base_commit));
+        assert_eq!(std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(), "base");
+        assert!(repo.statuses(None).unwrap().is_empty());
+    }
+
+    /// Tests that an existing branch is overwritten when creating a new branch with the same name.
+    #[test]
+    fn test_create_or_reset_branch_overwrites_existing_branch() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+
+        // Create a base and latest commit.
+        // NB: We'll create a new branch at the latest commit, but not check it out yet.
+        temp_dir.child("tracked.txt").write_str("base").unwrap();
+        let base_commit = commit(&repo, &["tracked.txt"], "base").unwrap();
+        temp_dir.child("tracked.txt").write_str("latest").unwrap();
+        let latest_commit = commit(&repo, &["tracked.txt"], "latest").unwrap();
+        repo.branch("feature", &repo.find_commit(latest_commit).unwrap(), false)
+            .unwrap();
+
+        // Overwrite the existing branch at the base commit.
+        create_or_reset_branch(&repo, "feature", base_commit).unwrap();
+
+        // Verify that the branch was overwritten.
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
+        assert_eq!(repo.head().unwrap().target(), Some(base_commit));
+        assert_eq!(std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(), "base");
+        assert!(repo.statuses(None).unwrap().is_empty());
+    }
+
+    /// Tests that an already checked out matching branch is reset to the given commit.
+    #[test]
+    fn test_create_or_reset_branch_resets_checked_out_branch() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+
+        // Create a base and latest commit.
+        // NB: We'll create a new branch at the latest commit, and switch to it.
+        temp_dir.child("tracked.txt").write_str("base").unwrap();
+        let base_commit = commit(&repo, &["tracked.txt"], "base").unwrap();
+        temp_dir.child("tracked.txt").write_str("latest").unwrap();
+        let latest_commit = commit(&repo, &["tracked.txt"], "latest").unwrap();
+        create_or_reset_branch(&repo, "feature", latest_commit).unwrap();
+        assert_eq!(repo.head().unwrap().target(), Some(latest_commit));
+
+        // Reset the currently checked out branch to the base commit.
+        create_or_reset_branch(&repo, "feature", base_commit).unwrap();
+
+        // Verify that the currently checked out branch was reset.
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
+        assert_eq!(repo.head().unwrap().target(), Some(base_commit));
+        assert_eq!(std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(), "base");
+        assert!(repo.statuses(None).unwrap().is_empty());
     }
 
     /// Tests that a remote URLs are parsed correctly.
