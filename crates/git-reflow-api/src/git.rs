@@ -1,5 +1,5 @@
 use anyhow::{Context, anyhow, bail, ensure};
-use git2::{Repository, StatusOptions};
+use git2::{IntoCString, Repository, StatusOptions};
 use tracing::{debug, error, warn};
 
 /// Ensures that the Git working directory is clean (no uncommitted changes).
@@ -134,7 +134,11 @@ pub fn create_or_reset_branch(repo: &Repository, name: &str, commit_id: git2::Oi
 /// # Returns
 ///
 /// A result containing the Git object ID (OID) of the new commit.
-pub fn commit(repo: &Repository, pathspecs: &[&str], message: &str) -> anyhow::Result<git2::Oid> {
+pub fn commit<T, I>(repo: &Repository, pathspecs: I, message: &str) -> anyhow::Result<git2::Oid>
+where
+    T: IntoCString,
+    I: IntoIterator<Item = T>,
+{
     // Stage the changes in the index.
     let mut index = repo.index().context("could not acquire index")?;
     index
@@ -161,6 +165,28 @@ pub fn commit(repo: &Repository, pathspecs: &[&str], message: &str) -> anyhow::R
         &parents,
     )
     .context("could not commit changes")
+}
+
+/// Pushes the specified branch to the `origin` remote.
+///
+/// # Arguments
+///
+/// - `repo` - The Git repository to push the branch from.
+/// - `branch_name` - The name of the branch to push.
+/// - `force` - Whether to force push the branch.
+///
+/// # Returns
+///
+/// A result indicating whether the push was successful or not.
+pub fn push_branch(repo: &Repository, branch_name: &str, force: bool) -> anyhow::Result<()> {
+    let mut remote = repo.find_remote("origin").context("failed to find origin remote")?;
+    let refspec = format!(
+        "{}refs/heads/{branch_name}:refs/heads/{branch_name}",
+        if force { "+" } else { "" }
+    );
+    remote
+        .push(&[&refspec], None)
+        .with_context(|| format!("failed to push branch `{branch_name}` to origin"))
 }
 
 /// A parsed Git remote URL containing the host, owner, and repository names.
@@ -478,6 +504,60 @@ mod tests {
         let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
         assert_eq!(head_commit.id(), commit_id);
         assert!(repo.find_commit(commit_id).is_ok());
+    }
+
+    /// Tests that a branch is pushed to the origin remote.
+    #[test]
+    fn test_push_branch() {
+        // Create a local and remote Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+        let remote_dir = assert_fs::TempDir::new().unwrap();
+        let remote_repo = Repository::init_bare(remote_dir.path()).unwrap();
+        repo.remote("origin", remote_dir.path().to_str().unwrap()).unwrap();
+
+        // Create and push a branch.
+        let base = repo.head().unwrap().target().unwrap();
+        create_or_reset_branch(&repo, "feature", base).unwrap();
+        push_branch(&repo, "feature", false).unwrap();
+
+        // Verify that the remote branch points to the local commit.
+        assert_eq!(
+            remote_repo.find_reference("refs/heads/feature").unwrap().target(),
+            Some(base)
+        );
+    }
+
+    /// Tests that force pushing a branch overwrites the origin remote branch.
+    #[test]
+    fn test_push_branch_with_force() {
+        // Create a local and remote Git repository.
+        let (temp_dir, repo) = create_test_repo();
+        let remote_dir = assert_fs::TempDir::new().unwrap();
+        let remote_repo = Repository::init_bare(remote_dir.path()).unwrap();
+        repo.remote("origin", remote_dir.path().to_str().unwrap()).unwrap();
+
+        // Push a branch and then advance it on the remote.
+        let base = repo.head().unwrap().target().unwrap();
+        create_or_reset_branch(&repo, "feature", base).unwrap();
+        push_branch(&repo, "feature", false).unwrap();
+        temp_dir.child("tracked.txt").write_str("remote version").unwrap();
+        commit(&repo, &["tracked.txt"], "remote version").unwrap();
+        push_branch(&repo, "feature", false).unwrap();
+
+        // Rewrite the local branch.
+        create_or_reset_branch(&repo, "feature", base).unwrap();
+        temp_dir.child("tracked.txt").write_str("local version").unwrap();
+        let local_version = commit(&repo, &["tracked.txt"], "local version").unwrap();
+
+        // Ensure that only a force push succeeds.
+        assert!(push_branch(&repo, "feature", false).is_err());
+        push_branch(&repo, "feature", true).unwrap();
+
+        // Verify that the remote branch points to the rewritten commit.
+        assert_eq!(
+            remote_repo.find_reference("refs/heads/feature").unwrap().target(),
+            Some(local_version)
+        );
     }
 
     /// Tests that a new branch is created.
