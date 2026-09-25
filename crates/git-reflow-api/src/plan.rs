@@ -21,6 +21,7 @@ pub struct PackageRelease {
     /// The rendered changelog markdown for the package.
     pub changelog_md: String,
     /// The `git-cliff` context for the package.
+    #[serde(skip_serializing_if = "Value::is_null")]
     pub context: Value,
 }
 

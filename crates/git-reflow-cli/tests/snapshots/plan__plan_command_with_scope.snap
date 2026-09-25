@@ -9,6 +9,146 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     "next-version": "1.1.0",
     "commit-message": "chore(example-api): release v1.1.0",
     "changelog-md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function",
-    "context": {}
+    "context": {
+      "azure_devops": {
+        "contributors": []
+      },
+      "bitbucket": {
+        "contributors": []
+      },
+      "bump_type": "minor",
+      "commit_id": "[COMMIT SHA]",
+      "commit_range": {
+        "from": "[COMMIT SHA]",
+        "to": "[COMMIT SHA]"
+      },
+      "commits": [
+        {
+          "author": {
+            "email": "test@localhost",
+            "name": "Test",
+            "timestamp": [COMMIT SHA]
+          },
+          "azure_devops": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "bitbucket": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "body": null,
+          "breaking": false,
+          "breaking_description": null,
+          "committer": {
+            "email": "test@localhost",
+            "name": "Test",
+            "timestamp": [COMMIT SHA]
+          },
+          "conventional": true,
+          "extra": null,
+          "footers": [],
+          "gitea": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "github": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "gitlab": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "group": "<!-- 0 -->🚀 Features",
+          "id": "[COMMIT SHA]",
+          "links": [],
+          "merge_commit": false,
+          "message": "add a `subtract` function",
+          "raw_message": "feat(api): add a `subtract` function",
+          "scope": "api",
+          "statistics": {
+            "additions": 3,
+            "deletions": 0,
+            "files_changed": 1
+          }
+        }
+      ],
+      "extra": null,
+      "gitea": {
+        "contributors": []
+      },
+      "github": {
+        "contributors": []
+      },
+      "gitlab": {
+        "contributors": []
+      },
+      "message": null,
+      "previous": {
+        "azure_devops": {
+          "contributors": []
+        },
+        "bitbucket": {
+          "contributors": []
+        },
+        "bump_type": null,
+        "commit_id": "[COMMIT SHA]",
+        "commit_range": null,
+        "commits": [],
+        "extra": null,
+        "gitea": {
+          "contributors": []
+        },
+        "github": {
+          "contributors": []
+        },
+        "gitlab": {
+          "contributors": []
+        },
+        "message": null,
+        "previous": null,
+        "repository": null,
+        "statistics": null,
+        "submodule_commits": {},
+        "timestamp": [COMMIT SHA],
+        "version": "v1.0.0"
+      },
+      "repository": "C:/Users/Jonathan/AppData/Local/Temp/[TEMPDIR]",
+      "statistics": {
+        "commit_count": 1,
+        "conventional_commit_count": 1,
+        "days_passed_since_last_release": 0,
+        "links": []
+      },
+      "submodule_commits": {},
+      "timestamp": [COMMIT SHA],
+      "version": "v1.1.0"
+    }
   }
 ]

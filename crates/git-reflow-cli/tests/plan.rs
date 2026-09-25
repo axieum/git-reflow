@@ -85,9 +85,9 @@ fn test_plan_command_with_scope(#[with("example-python-uv-workspace")] project_r
     });
 }
 
-/// Tests that the `plan` command allows outputting the `git-cliff` context.
+/// Tests that the `plan` command allows hiding the `git-cliff` context.
 #[rstest]
-fn test_plan_command_with_show_context(#[with("example-rust-workspace")] project_repo: (TempDir, Repository)) {
+fn test_plan_command_with_hide_context(#[with("example-rust-workspace")] project_repo: (TempDir, Repository)) {
     let (project_dir, repo) = project_repo;
 
     // Commit the current files to the `main` branch.
@@ -111,19 +111,16 @@ fn test_plan_command_with_show_context(#[with("example-rust-workspace")] project
     .unwrap();
     git_reflow_api::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
 
-    // Run the `plan` command, showing the `git-cliff` context.
+    // Run the `plan` command, hiding the `git-cliff` context.
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
     let assert = cmd
         .current_dir(&project_dir)
         .arg("plan")
-        .arg("--show-context")
+        .arg("--hide-context")
         .assert()
         .success();
 
-    // Parse the output as JSON and assert that the `context` field is present for each package release.
-    let json: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();
-    assert!(json[0]["context"].is_object());
-    assert!(json[0]["context"]["commits"].is_array());
-    assert!(json[1]["context"].is_object());
-    assert!(json[1]["context"]["commits"].is_array());
+    insta::with_settings!({ filters => INSTA_STDOUT_FILTERS }, {
+        insta::assert_snapshot!(String::from_utf8_lossy(&assert.get_output().stdout));
+    });
 }

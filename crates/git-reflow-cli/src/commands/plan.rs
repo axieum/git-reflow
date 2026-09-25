@@ -1,7 +1,6 @@
 use anyhow::Context;
 use git_reflow_api::plan::plan_releases;
 use git_reflow_api::settings::AppConfig;
-use serde_json::json;
 
 /// The `$ git reflow plan [package] ...` command.
 #[derive(clap::Parser, Debug)]
@@ -12,9 +11,9 @@ pub struct PlanCommand {
     /// The target branch name for the release [default: current branch].
     #[arg(short, long, value_name = "BRANCH")]
     pub target_branch: Option<String>,
-    /// Show the `git-cliff` context in the output.
-    #[arg(short = 'c', long, default_value_t = false)]
-    pub show_context: bool,
+    /// Hide the `git-cliff` context in the output.
+    #[arg(short = 'C', long, default_value_t = false)]
+    pub hide_context: bool,
 }
 
 impl PlanCommand {
@@ -37,10 +36,11 @@ impl PlanCommand {
         // Plan the package release/s.
         let mut plan = plan_releases(config, &self.packages, &target_branch).await?;
 
-        // If the user *does not* want to see the `git-cliff` context, replace it with an empty object.
-        if !self.show_context {
+        // If the user wants to hide the `git-cliff` context, replace it with null.
+        // NB: The `git-cliff` context can be very large, so this can help reduce the output size when not needed.
+        if self.hide_context {
             for release in &mut plan {
-                release.context = json!({});
+                release.context = serde_json::Value::Null;
             }
         }
 
