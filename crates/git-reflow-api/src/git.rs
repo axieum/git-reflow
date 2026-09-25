@@ -1,5 +1,6 @@
 use anyhow::{Context, anyhow, bail, ensure};
-use git2::{IntoCString, Repository, StatusOptions};
+use git2::{Repository, StatusOptions};
+use std::path::{Path, PathBuf};
 use tracing::{debug, error, warn};
 
 /// Ensures that the Git working directory is clean (no uncommitted changes).
@@ -88,6 +89,42 @@ pub fn build_branch_name(prefix: &str, name: &str) -> anyhow::Result<String> {
     Ok(format!("{}{}", prefix, branch))
 }
 
+/// Returns the given paths relative to the Git repository's working directory.
+///
+/// # Arguments
+///
+/// - `repo` - The Git repository.
+/// - `pathspecs` - The paths to make relative to the repository.
+///
+/// # Returns
+///
+/// A result containing a list of paths relative to the repository's working directory.
+pub fn paths_relative_to_repo<T, I>(repo: &Repository, pathspecs: I) -> anyhow::Result<Vec<PathBuf>>
+where
+    T: AsRef<Path>,
+    I: IntoIterator<Item = T>,
+{
+    let repo_dir = repo.workdir().context("repository has no working directory")?;
+    pathspecs
+        .into_iter()
+        .map(|path| {
+            let path = path.as_ref();
+            let relative = if path.is_absolute() {
+                path.strip_prefix(repo_dir)
+                    .with_context(|| format!("release file `{}` is outside the repository", path.display()))?
+            } else {
+                path
+            };
+            Ok(relative
+                .strip_prefix(".")
+                .ok()
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or(relative)
+                .to_path_buf())
+        })
+        .collect()
+}
+
 /// Creates a branch at the given commit, overwriting any existing local branch.
 ///
 /// # Arguments
@@ -136,10 +173,11 @@ pub fn create_or_reset_branch(repo: &Repository, name: &str, commit_id: git2::Oi
 /// A result containing the Git object ID (OID) of the new commit.
 pub fn commit<T, I>(repo: &Repository, pathspecs: I, message: &str) -> anyhow::Result<git2::Oid>
 where
-    T: IntoCString,
+    T: AsRef<Path>,
     I: IntoIterator<Item = T>,
 {
     // Stage the changes in the index.
+    let pathspecs = paths_relative_to_repo(repo, pathspecs)?;
     let mut index = repo.index().context("could not acquire index")?;
     index
         .add_all(pathspecs, git2::IndexAddOption::DEFAULT, None)
@@ -412,6 +450,41 @@ mod tests {
     fn test_build_branch_name_when_invalid(#[case] name: &str) {
         let branch_name = build_branch_name("reflow-branches--", name);
         assert!(branch_name.is_err(), "expected error, got: {:?}", branch_name.unwrap());
+    }
+
+    /// Tests that paths are converted to relative to a given Git repository root.
+    #[test]
+    fn test_paths_relative_to_repo() {
+        // Create a Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+
+        // Create a nested path and test various absolute and relative paths.
+        let relative = PathBuf::from("nested").join("release.toml");
+        let paths = [
+            repo.workdir().unwrap().join(&relative),
+            PathBuf::from(".").join(&relative),
+            relative.clone(),
+        ];
+
+        // Verify that the paths are converted to relative to the repository root.
+        assert_eq!(
+            paths_relative_to_repo(&repo, paths.into_iter()).unwrap(),
+            vec![relative; 3]
+        );
+        assert_eq!(paths_relative_to_repo(&repo, ["."]).unwrap(), vec![PathBuf::from(".")]);
+    }
+
+    /// Tests that a paths outside the repository return an error when converted to relative to the Git repository root.
+    #[test]
+    fn test_paths_relative_to_repo_returns_error_when_outside() {
+        // Create a Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+
+        // Create a path outside the repository root.
+        let outside = repo.workdir().unwrap().parent().unwrap().join("outside.toml");
+
+        // Verify that an error is returned.
+        assert!(paths_relative_to_repo(&repo, &[outside]).is_err());
     }
 
     /// Tests that a clean working directory passes.
