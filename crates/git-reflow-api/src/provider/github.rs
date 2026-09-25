@@ -5,7 +5,7 @@ use octocrab::Octocrab;
 use octocrab::params::State;
 use std::env;
 use std::sync::OnceLock;
-use tracing::debug;
+use tracing::trace;
 
 /// The [GitHub](https://github.com/) Git provider.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -41,6 +41,7 @@ impl GitHubProvider {
     /// Constructs an [`Octocrab`] client using the `GITHUB_TOKEN` environment variable.
     ///
     /// # Returns
+    ///
     /// An [`Octocrab`] instance or an error if the `GITHUB_TOKEN` environment variable is not set.
     fn client(&self) -> anyhow::Result<&Octocrab> {
         // Short-circuit if the client is already initialised.
@@ -78,7 +79,7 @@ impl BaseGitProvider for GitHubProvider {
         let pulls = client.pulls(owner, repo);
 
         let head_filter = format!("{owner}:{head}");
-        debug!("find open pull requests with head: {head_filter}; base: {base}");
+        trace!("find open pull requests with head: {head_filter}; base: {base}");
         let prs = pulls
             .list()
             .state(State::Open)
@@ -91,7 +92,7 @@ impl BaseGitProvider for GitHubProvider {
 
         // If a pull request already exists, update it.
         if let Some(pr) = prs.items.first() {
-            debug!("updating existing pull request #{}", pr.number);
+            trace!("updating existing pull request #{}", pr.number);
             let updated = pulls
                 .update(pr.number)
                 .title(title)
@@ -110,7 +111,7 @@ impl BaseGitProvider for GitHubProvider {
         }
 
         // A pull request does not exist yet, create one.
-        debug!("creating new pull request: {} -> {}", head, base);
+        trace!("creating new pull request: {} -> {}", head, base);
         let created = pulls
             .create(title, head, base)
             .body(body)
