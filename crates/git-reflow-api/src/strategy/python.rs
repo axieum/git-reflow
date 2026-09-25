@@ -5,7 +5,7 @@ use regex::Regex;
 use semver::Version;
 use std::borrow::Cow;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use toml::Value;
 use toml_edit::DocumentMut;
 use tracing::debug;
@@ -25,11 +25,21 @@ impl BaseStrategy for PythonStrategy {
     /// * `new_version` - The new version to apply.
     /// * `config` - The package configuration.
     /// * `dry_run` - If true, do not actually write the changes.
-    fn write_version(&self, new_version: &Version, config: &PackageConfig, dry_run: bool) -> anyhow::Result<()> {
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of the changed file paths.
+    fn write_version(
+        &self,
+        new_version: &Version,
+        config: &PackageConfig,
+        dry_run: bool,
+    ) -> anyhow::Result<Vec<PathBuf>> {
         // Update the `pyproject.toml` file
         let pyproject = &config.dir.join("pyproject.toml");
         if pyproject.try_exists()? {
-            return Self::write_version_to_pyproject_toml(pyproject, new_version, dry_run);
+            Self::write_version_to_pyproject_toml(pyproject, new_version, dry_run)?;
+            return Ok(vec![pyproject.to_path_buf()]);
         } else {
             debug!(
                 "a `pyproject.toml` file was not found at `{}`, skipping",
@@ -40,12 +50,13 @@ impl BaseStrategy for PythonStrategy {
         // Update the `setup.py` file
         let setup_py = &config.dir.join("setup.py");
         if setup_py.try_exists()? {
-            return Self::write_version_to_setup_py(setup_py, new_version, dry_run);
+            Self::write_version_to_setup_py(setup_py, new_version, dry_run)?;
+            return Ok(vec![setup_py.to_path_buf()]);
         } else {
             debug!("a `setup.py` file was not found at `{}`, skipping", setup_py.display());
         }
 
-        Ok(())
+        Ok(vec![])
     }
 
     /// Suggests the package name from either the `pyproject.toml` or `setup.py` files.

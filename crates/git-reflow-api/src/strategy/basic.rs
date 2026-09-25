@@ -2,7 +2,7 @@ use crate::settings::pkg::PackageConfig;
 use crate::strategy::BaseStrategy;
 use anyhow::Context;
 use semver::Version;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::debug;
 
 /// The basic release strategy.
@@ -20,15 +20,24 @@ impl BaseStrategy for BasicStrategy {
     /// * `new_version` - The new version to apply.
     /// * `config` - The package configuration.
     /// * `dry_run` - If true, do not actually write the changes.
-    fn write_version(&self, new_version: &Version, config: &PackageConfig, dry_run: bool) -> anyhow::Result<()> {
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of the changed file paths.
+    fn write_version(
+        &self,
+        new_version: &Version,
+        config: &PackageConfig,
+        dry_run: bool,
+    ) -> anyhow::Result<Vec<PathBuf>> {
         let path = config.dir.join("VERSION.txt");
         if !dry_run {
             std::fs::write(&path, format!("v{new_version}"))?;
-            debug!("wrote `v{}` to `{}`", new_version, path.display());
+            debug!("write `v{}` to `{}`", new_version, path.display());
         } else {
             debug!("write `v{}` to `{}` (dry run)", new_version, path.display());
         }
-        Ok(())
+        Ok(vec![path])
     }
 
     /// Suggests the package name from the directory name.
@@ -78,11 +87,12 @@ mod tests {
             ..Default::default()
         };
 
-        strategy
+        let changed_files = strategy
             .write_version(&Version::parse("1.2.3-rc.2").unwrap(), &config, false)
             .unwrap();
 
         dir.child("VERSION.txt").assert("v1.2.3-rc.2");
+        assert_eq!(changed_files, vec![config.dir.join("VERSION.txt")]);
     }
 
     /// Tests that the version is *not* written to a file in the package root when performing a dry run.

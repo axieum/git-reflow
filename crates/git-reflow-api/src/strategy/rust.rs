@@ -24,19 +24,30 @@ impl BaseStrategy for RustStrategy {
     /// * `new_version` - The new version to apply.
     /// * `config` - The package configuration.
     /// * `dry_run` - If true, do not actually write the changes.
-    fn write_version(&self, new_version: &Version, config: &PackageConfig, dry_run: bool) -> anyhow::Result<()> {
-        // Update the `Cargo.toml` file
-        if Self::write_version_to_cargo_toml(&config.dir.join("Cargo.toml"), new_version, dry_run)? {
-            // Update the `Cargo.lock` file
-            Self::write_version_to_cargo_lock(
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of the changed file paths.
+    fn write_version(
+        &self,
+        new_version: &Version,
+        config: &PackageConfig,
+        dry_run: bool,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        // Update the `Cargo.toml` file.
+        let cargo_toml_path = config.dir.join("Cargo.toml");
+        if Self::write_version_to_cargo_toml(&cargo_toml_path, new_version, dry_run)? {
+            // Update the `Cargo.lock` file.
+            let cargo_lock_path = Self::write_version_to_cargo_lock(
                 &std::env::current_dir()?,
                 &config.dir,
                 config.name(),
                 new_version,
                 dry_run,
             )?;
+            return Ok(vec![cargo_toml_path, cargo_lock_path]);
         }
-        Ok(())
+        Ok(vec![])
     }
 
     /// Suggests the package name from the `[package.name]` field of the `Cargo.toml` file.
@@ -196,7 +207,7 @@ impl RustStrategy {
     ///
     /// # Returns
     ///
-    /// A result of whether the update was successful.
+    /// A result containing the path to the updated `Cargo.lock` file.
     ///
     /// # See Also
     ///
@@ -207,7 +218,7 @@ impl RustStrategy {
         name: &str,
         new_version: &Version,
         dry_run: bool,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<PathBuf> {
         let lockfile = Self::find_cargo_lock(dir, root)?;
         let lockfile_display = lockfile.strip_prefix(root)?.display();
         let contents =
@@ -235,7 +246,7 @@ impl RustStrategy {
             debug!("set `[[package]] version` to `{new_version}` for `{name}` at `{lockfile_display}` (dry run)");
         }
 
-        Ok(())
+        Ok(lockfile)
     }
 
     /// Finds the closest `Cargo.lock` file from a given package directory upwards.

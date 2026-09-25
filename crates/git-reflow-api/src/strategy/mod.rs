@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, de};
 use std::fmt;
 use std::fmt::Display;
 use std::marker::PhantomData;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 pub mod basic;
@@ -38,7 +38,16 @@ pub trait BaseStrategy {
     /// * `new_version` - The new version to apply.
     /// * `config` - The package configuration.
     /// * `dry_run` - If true, do not actually write the changes.
-    fn write_version(&self, new_version: &Version, config: &PackageConfig, dry_run: bool) -> anyhow::Result<()>;
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of the changed file paths.
+    fn write_version(
+        &self,
+        new_version: &Version,
+        config: &PackageConfig,
+        dry_run: bool,
+    ) -> anyhow::Result<Vec<PathBuf>>;
 
     /// Suggests the package name from the project files.
     ///
@@ -64,7 +73,12 @@ pub trait BaseStrategy {
 }
 
 impl BaseStrategy for Strategy {
-    fn write_version(&self, new_version: &Version, config: &PackageConfig, dry_run: bool) -> anyhow::Result<()> {
+    fn write_version(
+        &self,
+        new_version: &Version,
+        config: &PackageConfig,
+        dry_run: bool,
+    ) -> anyhow::Result<Vec<PathBuf>> {
         match self {
             Strategy::Basic(strategy) => strategy.write_version(new_version, config, dry_run),
             Strategy::Python(strategy) => strategy.write_version(new_version, config, dry_run),
