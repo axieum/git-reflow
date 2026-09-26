@@ -1,5 +1,4 @@
-use assert_fs::TempDir;
-use assert_fs::prelude::PathCopy;
+use assert_fs::{TempDir, prelude::*};
 use git2::Repository;
 use rstest::*;
 use std::path::PathBuf;
@@ -86,4 +85,46 @@ pub fn project_repo(#[default(".")] name: &str) -> (TempDir, Repository) {
     config.set_str("user.email", "test@localhost").unwrap();
 
     (temp_dir, repository)
+}
+
+/// Adds a remote with the given name to the provided local Git repository, pointing
+/// to a new temporary bare Git repository.
+///
+/// # Arguments
+///
+/// - `local_repo` - The local Git repository to add the remote to.
+/// - `remote_name` - The name of the remote to be added, e.g. `origin`.
+/// - `owner` - The owner of the remote repository, i.e. the GitHub username.
+/// - `repo_name` - The name of the remote repository, e.g. `my-repo`.
+///
+/// # Returns
+///
+/// A tuple containing:
+///
+/// - A [`assert_fs::TempDir`] representing the temporary directory containing the bare remote Git repository.
+/// - A [`git2::Repository`] representing the bare remote Git repository.
+pub fn add_origin_remote(
+    local_repo: &Repository,
+    remote_name: &str,
+    owner: &str,
+    repo_name: &str,
+) -> (TempDir, Repository) {
+    // Initialise a new bare Git repository.
+    let temp_dir = TempDir::new().unwrap();
+    let remote_path = temp_dir.child(owner).child(format!("{}.git", repo_name));
+    remote_path.create_dir_all().unwrap();
+    let remote_repo = Repository::init_bare(&remote_path).unwrap();
+
+    // Add the remote to the local repository.
+    local_repo
+        .remote(
+            remote_name,
+            &format!(
+                "file://localhost/{}",
+                remote_path.display().to_string().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+
+    (temp_dir, remote_repo)
 }

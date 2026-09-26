@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 /// A planned package release.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct PackageRelease {
     /// The package configuration.

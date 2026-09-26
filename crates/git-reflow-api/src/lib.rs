@@ -1,3 +1,4 @@
+pub mod apply;
 pub mod detect;
 pub mod git;
 pub mod git_cliff;
