@@ -161,10 +161,10 @@ impl PythonStrategy {
         // `project.version`.
         if let Some(project) = data["project"].as_table_mut() {
             if !dry_run {
+                debug!("set `[project.version]` to `{new_version}` at `{}`", filename.display());
                 project["version"] = toml_edit::value(new_version.to_string());
                 fs::write(filename, data.to_string())
                     .map_err(|err| anyhow!("failed to write `[project.version]` to `{}`: {err}", filename.display()))?;
-                debug!("set `[project.version]` to `{new_version}` at `{}`", filename.display());
             } else {
                 debug!(
                     "set `[project.version]` to `{new_version}` at `{}` (dry run)",
@@ -180,6 +180,10 @@ impl PythonStrategy {
             .and_then(|tool| tool["poetry"].as_table_mut())
         {
             if !dry_run {
+                debug!(
+                    "set `[tool.poetry.version]` to `{new_version}` at `{}`",
+                    filename.display()
+                );
                 poetry["version"] = toml_edit::value(new_version.to_string());
                 fs::write(filename, data.to_string()).map_err(|err| {
                     anyhow!(
@@ -187,10 +191,6 @@ impl PythonStrategy {
                         filename.display()
                     )
                 })?;
-                debug!(
-                    "set `[tool.poetry.version]` to `{new_version}` at `{}`",
-                    filename.display()
-                );
             } else {
                 debug!(
                     "set `[tool.poetry.version]` to `{new_version}` at `{}` (dry run)",
@@ -229,9 +229,9 @@ impl PythonStrategy {
         // Check if the contents were actually modified, i.e. got a new `&str` reference.
         if let Cow::Owned(new_contents) = new_contents {
             if !dry_run {
+                debug!("set `version` to `{new_version}` at `{}`", filename.display());
                 fs::write(filename, new_contents)
                     .map_err(|err| anyhow!("failed to write `version` to `{}`: {err}", filename.display()))?;
-                debug!("set `version` to `{new_version}` at `{}`", filename.display());
             } else {
                 debug!("set `version` to `{new_version}` at `{}` (dry run)", filename.display());
             }

@@ -173,10 +173,10 @@ impl RustStrategy {
 
         if let Some(package) = data["package"].as_table_mut() {
             if !dry_run {
+                debug!("set `[package.version]` to `{new_version}` at `{}`", filename.display());
                 package["version"] = toml_edit::value(new_version.to_string());
                 fs::write(filename, data.to_string())
                     .map_err(|err| anyhow!("failed to write `[package.version]` to `{}`: {err}", filename.display()))?;
-                debug!("set `[package.version]` to `{new_version}` at `{}`", filename.display());
             } else {
                 debug!(
                     "set `[package.version]` to `{new_version}` at `{}` (dry run)",
@@ -238,10 +238,10 @@ impl RustStrategy {
             .context(format!("package `{name}` not found in `{}`", lockfile_display))?;
 
         if !dry_run {
+            debug!("set `[[package]] version` to `{new_version}` for `{name}` at `{lockfile_display}`");
             package["version"] = toml_edit::value(new_version.to_string());
             fs::write(&lockfile, data.to_string())
                 .map_err(|err| anyhow!("failed to write `[[package.version]]` to `{lockfile_display}`: {err}"))?;
-            debug!("set `[[package]] version` to `{new_version}` for `{name}` at `{lockfile_display}`");
         } else {
             debug!("set `[[package]] version` to `{new_version}` for `{name}` at `{lockfile_display}` (dry run)");
         }

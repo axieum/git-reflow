@@ -32,8 +32,8 @@ impl BaseStrategy for BasicStrategy {
     ) -> anyhow::Result<Vec<PathBuf>> {
         let path = config.dir.join("VERSION.txt");
         if !dry_run {
-            std::fs::write(&path, format!("v{new_version}"))?;
             debug!("write `v{}` to `{}`", new_version, path.display());
+            std::fs::write(&path, format!("v{new_version}"))?;
         } else {
             debug!("write `v{}` to `{}` (dry run)", new_version, path.display());
         }
