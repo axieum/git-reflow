@@ -116,15 +116,8 @@ pub fn add_origin_remote(
     let remote_repo = Repository::init_bare(&remote_path).unwrap();
 
     // Add the remote to the local repository.
-    local_repo
-        .remote(
-            remote_name,
-            &format!(
-                "file://localhost/{}",
-                remote_path.display().to_string().replace('\\', "/")
-            ),
-        )
-        .unwrap();
+    let remote_url = url::Url::from_file_path(remote_path.path()).unwrap();
+    local_repo.remote(remote_name, remote_url.as_str()).unwrap();
 
     (temp_dir, remote_repo)
 }

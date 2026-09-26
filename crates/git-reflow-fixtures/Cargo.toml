@@ -8,3 +8,4 @@ license.workspace = true
 assert_fs = "1.1.4"
 git2 = "0.21.0"
 rstest = "0.27.0"
+url = "2.5.8"
