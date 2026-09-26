@@ -139,7 +139,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
         "timestamp": [COMMIT SHA],
         "version": "v1.0.0"
       },
-      "repository": "C:/Users/Jonathan/AppData/Local/Temp/[TEMPDIR]",
+      "repository": "[TEMPDIR]",
       "statistics": {
         "commit_count": 1,
         "conventional_commit_count": 1,
@@ -287,7 +287,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
         "timestamp": [COMMIT SHA],
         "version": "v1.0.0"
       },
-      "repository": "C:/Users/Jonathan/AppData/Local/Temp/[TEMPDIR]",
+      "repository": "[TEMPDIR]",
       "statistics": {
         "commit_count": 1,
         "conventional_commit_count": 1,
