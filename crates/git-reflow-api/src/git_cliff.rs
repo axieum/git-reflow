@@ -1,6 +1,7 @@
 use anyhow::{Context, anyhow, bail};
 use semver::Version;
 use serde_json::Value;
+use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
@@ -99,6 +100,17 @@ pub fn run_git_cliff(dir: &Path, runner: Option<&dyn CommandRunner>) -> anyhow::
 /// * `context` - The `git-cliff` context data.
 /// * `runner` - The `git-cliff` command runner.
 pub fn apply_git_cliff_context(path: &Path, context: &Value, runner: Option<&dyn CommandRunner>) -> anyhow::Result<()> {
+    // Ensure the changelog file exists, creating it if necessary.
+    if !path.exists() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create changelog directory `{}`", parent.display()))?;
+        }
+        fs::File::create(path).with_context(|| format!("failed to create changelog file `{}`", path.display()))?;
+    }
+
     // Prepare `git-cliff` arguments.
     let context_json = serde_json::to_string(&[context]).context("failed to serialize context")?;
     let args = ["--from-context", "-", "--prepend", &path.to_string_lossy(), "--latest"];
@@ -172,8 +184,9 @@ pub fn get_version_from_git_cliff_context(context: &Value) -> anyhow::Result<(Op
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use assert_fs::{TempDir, prelude::*};
     use mockall::mock;
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
@@ -182,9 +195,9 @@ mod tests {
 
     mock! {
         /// The mock `git-cliff` command executor.
-        pub MockGitCliffRunner {}
+        pub(crate) GitCliffRunner {}
 
-        impl CommandRunner for MockGitCliffRunner {
+        impl CommandRunner for GitCliffRunner {
             fn run<'a>(&self, args: &'a [&'a str], input: Option<&'a str>) -> anyhow::Result<Output>;
         }
     }
@@ -195,7 +208,7 @@ mod tests {
         let include_dir = Path::new("crates").join("pkg-a");
         let include_glob = include_dir.join("**").join("*");
 
-        let mut runner = MockMockGitCliffRunner::new();
+        let mut runner = MockGitCliffRunner::new();
         runner
             .expect_run()
             .withf(move |args, _| {
@@ -227,7 +240,7 @@ mod tests {
         let include_dir = Path::new("crates").join("pkg-a");
         let include_glob = include_dir.join("**").join("*");
 
-        let mut runner = MockMockGitCliffRunner::new();
+        let mut runner = MockGitCliffRunner::new();
         runner
             .expect_run()
             .withf(move |args, _| {
@@ -259,7 +272,7 @@ mod tests {
         let include_dir = Path::new("crates").join("pkg-b");
         let include_glob = include_dir.join("**").join("*");
 
-        let mut runner = MockMockGitCliffRunner::new();
+        let mut runner = MockGitCliffRunner::new();
         runner
             .expect_run()
             .withf(move |args, _| {
@@ -291,7 +304,7 @@ mod tests {
         let include_dir = Path::new("crates").join("pkg-c");
         let include_glob = include_dir.join("**").join("*");
 
-        let mut runner = MockMockGitCliffRunner::new();
+        let mut runner = MockGitCliffRunner::new();
         runner
             .expect_run()
             .withf(move |args, _| {
@@ -323,7 +336,7 @@ mod tests {
         let include_dir = Path::new("crates").join("pkg-c");
         let include_glob = include_dir.join("**").join("*");
 
-        let mut runner = MockMockGitCliffRunner::new();
+        let mut runner = MockGitCliffRunner::new();
         runner
             .expect_run()
             .withf(move |args, _| {
@@ -358,7 +371,7 @@ mod tests {
         let include_dir = Path::new(".");
         let include_glob = Path::new("**").join("*"); // no leading `./`
 
-        let mut runner = MockMockGitCliffRunner::new();
+        let mut runner = MockGitCliffRunner::new();
         runner
             .expect_run()
             .withf(move |args, _| {
@@ -387,11 +400,13 @@ mod tests {
     /// Tests that the JSON context is applied by `git-cliff --from-context -`.
     #[test]
     fn apply_git_cliff_context_with_success() {
-        let changelog_path = Path::new("crates").join("pkg-a").join("CHANGELOG.md");
+        let temp_dir = TempDir::new().unwrap();
+        let changelog_path = temp_dir.child("CHANGELOG.md");
+        changelog_path.write_str("# Changelog").unwrap();
         let changelog_path_str = changelog_path.to_string_lossy().to_string();
         let context = serde_json::json!({"version": "1.0.0"});
 
-        let mut runner = MockMockGitCliffRunner::new();
+        let mut runner = MockGitCliffRunner::new();
         runner
             .expect_run()
             .withf(move |args, input| {
@@ -411,14 +426,49 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// Tests that the changelog file is created if it does not exist yet when applying the `git-cliff` context.
+    #[test]
+    fn apply_git_cliff_context_creates_changelog_file_when_missing() {
+        // Create a temporary directory where the `CHANGELOG.md` file will be created.
+        let temp_dir = TempDir::new().unwrap();
+        let changelog_path = temp_dir.child("crates").child("api").child("CHANGELOG.md");
+        let changelog_path_str = changelog_path.to_string_lossy().to_string();
+
+        // Mock the `git-cliff` runner.
+        let mut runner = MockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, input| {
+                args == ["--from-context", "-", "--prepend", &changelog_path_str, "--latest"]
+                    && input.as_deref() == Some(r#"[{"version":"1.0.0"}]"#)
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0), // success
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
+
+        // Apply the `git-cliff` context, which should create the `CHANGELOG.md` file.
+        let context = serde_json::json!({"version": "1.0.0"});
+        let result = apply_git_cliff_context(&changelog_path, &context, Some(&runner));
+
+        // Verify that the `CHANGELOG.md` file was created and the result is successful.
+        assert!(result.is_ok());
+        assert!(changelog_path.exists());
+    }
+
     /// Tests that a non-zero exit code from `git-cliff --from-context -` is handled gracefully.
     #[test]
     fn apply_git_cliff_context_with_erroneous_exit_code() {
-        let changelog_path = Path::new("crates").join("pkg-a").join("CHANGELOG.md");
+        let temp_dir = TempDir::new().unwrap();
+        let changelog_path = temp_dir.child("CHANGELOG.md");
+        changelog_path.write_str("# Changelog").unwrap();
         let changelog_path_str = changelog_path.to_string_lossy().to_string();
         let context = serde_json::json!({"version": "1.0.0"});
 
-        let mut runner = MockMockGitCliffRunner::new();
+        let mut runner = MockGitCliffRunner::new();
         runner
             .expect_run()
             .withf(move |args, input| {
