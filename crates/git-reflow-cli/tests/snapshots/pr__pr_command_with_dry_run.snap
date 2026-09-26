@@ -1,0 +1,13 @@
+---
+source: crates/git-reflow-cli/tests/pr.rs
+expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
+---
+[
+  {
+    "number": 0,
+    "url": "",
+    "head": "reflow--branches--main",
+    "base": "main",
+    "is_new": true
+  }
+]

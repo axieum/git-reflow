@@ -1,0 +1,13 @@
+---
+source: crates/git-reflow-cli/tests/pr.rs
+expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
+---
+[
+  {
+    "number": 1347,
+    "url": "https://github.com/octocat/Hello-World/pull/1347",
+    "head": "reflow--branches--main",
+    "base": "main",
+    "is_new": true
+  }
+]

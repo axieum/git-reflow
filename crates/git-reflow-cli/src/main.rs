@@ -1,5 +1,6 @@
 use crate::commands::config::ConfigCommand;
 use crate::commands::plan::PlanCommand;
+use crate::commands::pr::PullRequestCommand;
 use clap::{ColorChoice, Parser, builder::PathBufValueParser};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use git_reflow_api::settings;
@@ -32,6 +33,9 @@ pub struct CliArgs {
 pub enum Command {
     /// Plan the releases for packages/s without actually releasing anything.
     Plan(PlanCommand),
+    /// Create or update release pull request/s for changes to package/s.
+    #[command(name = "pr")]
+    PullRequest(PullRequestCommand),
     /// Print the configuration and exit.
     Config(ConfigCommand),
 }
@@ -51,6 +55,10 @@ async fn main() -> anyhow::Result<()> {
                     .with_default_directive(cli.verbose.log_level_filter().as_trace().into())
                     .from_env_lossy()
                     .add_directive("handlebars=warn".parse().unwrap())
+                    .add_directive("hyper_rustls=warn".parse().unwrap())
+                    .add_directive("hyper_util=warn".parse().unwrap())
+                    .add_directive("octocrab=warn".parse().unwrap())
+                    .add_directive("tower=warn".parse().unwrap())
             }),
         )
         .with_ansi(match cli.color {
@@ -80,6 +88,8 @@ async fn run(cli: CliArgs) -> anyhow::Result<()> {
         Command::Config(cmd) => cmd.print_config(&config)?,
         // $ git reflow plan [package] ...
         Command::Plan(cmd) => cmd.plan(&config).await?,
+        // $ git reflow pr [package] ...
+        Command::PullRequest(cmd) => cmd.create_pull_requests(&config).await?,
     }
 
     Ok(())
