@@ -178,7 +178,14 @@ pub async fn apply_release_plan(
             );
             pull_requests.push(pr);
         } else {
-            debug!("skipping pull request for branch `{}` (dry run)", branch_name);
+            debug!("🔀 created pull request (dry run)");
+            pull_requests.push(PullRequest {
+                number: 0,
+                url: String::new(),
+                head: branch_name,
+                base: guard.original_branch.clone(),
+                is_new: true,
+            });
         }
     }
 
