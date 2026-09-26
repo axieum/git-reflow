@@ -17,12 +17,16 @@ pub enum GitProvider {
 }
 
 /// A pull request that has been created or updated on a Git provider.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct PullRequest {
-    /// The pull request number / ID.
-    pub id: u64,
+    /// The pull request number.
+    pub number: u64,
     /// The URL of the pull request.
     pub url: String,
+    /// The name of the branch where the changes are implemented, e.g. `reflow--branches--main`.
+    pub head: String,
+    /// The name of the branch the changes are pulled into, e.g. `main`.
+    pub base: String,
     /// Whether the pull request was created (true) or updated (false).
     pub is_new: bool,
 }

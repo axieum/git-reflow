@@ -11,7 +11,7 @@ use tracing::trace;
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct GitHubProvider {
-    /// The GitHub host URL.
+    /// The GitHub host, or a full API URL for a custom endpoint.
     ///
     /// **Default:** github.com
     #[serde(default = "default_host")]
@@ -55,7 +55,12 @@ impl GitHubProvider {
 
         // For GitHub Enterprise, set the base URI to the API endpoint.
         if self.host != "github.com" {
-            builder = builder.base_uri(format!("https://{}/api/v3", self.host))?;
+            let base_uri = if self.host.contains("://") {
+                self.host.clone()
+            } else {
+                format!("https://{}/api/v3", self.host)
+            };
+            builder = builder.base_uri(base_uri)?;
         }
 
         // Build the Octocrab client once and return it.
@@ -101,11 +106,13 @@ impl BaseGitProvider for GitHubProvider {
                 .await
                 .context("failed to update pull request")?;
             return Ok(PullRequest {
-                id: updated.number,
+                number: updated.number,
                 url: updated
                     .html_url
                     .map(|url| url.to_string())
                     .unwrap_or_else(|| format!("https://{}/{}/{}/pull/{}", self.host, owner, repo, updated.number)),
+                head: head.to_string(),
+                base: base.to_string(),
                 is_new: false,
             });
         }
@@ -120,18 +127,20 @@ impl BaseGitProvider for GitHubProvider {
             .context("failed to create pull request")?;
 
         Ok(PullRequest {
-            id: created.number,
+            number: created.number,
             url: created
                 .html_url
                 .map(|url| url.to_string())
                 .unwrap_or_else(|| format!("https://{}/{}/{}/pull/{}", self.host, owner, repo, created.number)),
+            head: head.to_string(),
+            base: base.to_string(),
             is_new: true,
         })
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use httpmock::prelude::*;
     use rstest::{fixture, rstest};
@@ -143,7 +152,7 @@ mod tests {
     }
 
     /// Starts an HTTP mock server and configures the [`Octocrab`] client to use it for the given provider.
-    async fn mock_octocrab(provider: &GitHubProvider) -> MockServer {
+    pub(crate) async fn mock_octocrab(provider: &GitHubProvider) -> MockServer {
         let server = MockServer::start_async().await;
         provider
             .client
@@ -222,11 +231,18 @@ mod tests {
             .unwrap();
 
         // Ensure the pull request was created successfully.
-        list_mock.assert();
-        create_mock.assert();
-        assert_eq!(pr.id, 1347);
-        assert_eq!(pr.url, "https://github.com/octocat/Hello-World/pull/1347");
-        assert!(pr.is_new);
+        list_mock.assert_async().await;
+        create_mock.assert_async().await;
+        assert_eq!(
+            pr,
+            PullRequest {
+                number: 1347,
+                url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                head: "reflow--branches--main".to_string(),
+                base: "main".to_string(),
+                is_new: true,
+            }
+        );
     }
 
     /// Tests that an existing pull request is updated when one already exists.
@@ -265,10 +281,17 @@ mod tests {
             .unwrap();
 
         // Ensure the existing pull request was updated successfully.
-        list_mock.assert();
-        update_mock.assert();
-        assert_eq!(pr.id, 1347);
-        assert_eq!(pr.url, "https://github.com/octocat/Hello-World/pull/1347");
-        assert!(!pr.is_new);
+        list_mock.assert_async().await;
+        update_mock.assert_async().await;
+        assert_eq!(
+            pr,
+            PullRequest {
+                number: 1347,
+                url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                head: "reflow--branches--main".to_string(),
+                base: "main".to_string(),
+                is_new: false,
+            }
+        );
     }
 }
