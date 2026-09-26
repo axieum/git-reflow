@@ -47,23 +47,21 @@ pub fn get_dirty_files(repo: &Repository) -> anyhow::Result<Vec<String>> {
         .collect::<Vec<_>>())
 }
 
-/// Builds a valid Git branch name and prepends the given prefix.
+/// Sanitises a valid Git branch name.
 ///
 ///   * Replacing non-alphanumeric characters with dashes;
 ///   * Collapsing multiple dashes into one;
 ///   * Removing leading/trailing dashes;
-///   * Converting to lowercase;
-///   * Prepending the given prefix verbatim.
+///   * Converting to lowercase.
 ///
 /// # Arguments
 ///
-/// * `prefix` - The prefix to prepend to the branch name.
-/// * `name` - The name to sanitise.
+/// * `name` - The branch name to sanitise.
 ///
 /// # Returns
 ///
 /// A result containing a valid Git branch name for the given name, or an error if the name would be empty.
-pub fn build_branch_name(prefix: &str, name: &str) -> anyhow::Result<String> {
+pub fn sanitize_branch_name(name: &str) -> anyhow::Result<String> {
     // Sanitise the branch name.
     let branch = name
         // Replace non-alphanumeric characters with dashes.
@@ -79,14 +77,14 @@ pub fn build_branch_name(prefix: &str, name: &str) -> anyhow::Result<String> {
         // Convert to lowercase.
         .to_lowercase();
 
-    // If the resulting branch name is empty, return an error.
+    // If the resulting branch is empty, return an error.
     ensure!(
         !branch.is_empty(),
         "the name `{}` would result in an empty branch name",
         name
     );
 
-    Ok(format!("{}{}", prefix, branch))
+    Ok(branch)
 }
 
 /// Returns the given paths relative to the Git repository's working directory.
@@ -193,6 +191,7 @@ where
 
     // Commit the changes to the repository and return.
     let tree_oid = index.write_tree().context("could not stage changes")?;
+    index.write().context("could not write Git index")?;
     let signature = repo.signature()?;
     repo.commit(
         Some("HEAD"),
@@ -265,6 +264,7 @@ pub fn parse_remote_url(url: &str) -> anyhow::Result<RemoteRef> {
         let parsed = url::Url::parse(trimmed).context("failed to parse remote URL")?;
         host = parsed
             .host_str()
+            .or_else(|| (parsed.scheme() == "file").then_some("localhost"))
             .ok_or_else(|| anyhow!("missing host in remote URL: {url}"))?
             .to_string();
         path = parsed.path().to_string();
@@ -435,21 +435,19 @@ mod tests {
     #[case::multiple_dots("release..candidate", "release-candidate")]
     #[case::leading_trailing_dots("...release.", "release")]
     #[case::complex_chars("my--weird*^branch----!~!-na*me", "my-weird-branch-na-me")]
-    fn test_build_branch_name(#[case] name: &str, #[case] expected: &str) {
-        let branch = build_branch_name("reflow-branches--", name).unwrap();
-        assert_eq!(branch, format!("reflow-branches--{}", expected));
-        assert!(git2::Reference::is_valid_name(&format!(
-            "refs/heads/reflow-branches--{branch}"
-        )));
+    fn test_sanitize_branch_name(#[case] name: &str, #[case] expected: &str) {
+        let branch = sanitize_branch_name(name).unwrap();
+        assert_eq!(branch, expected);
+        assert!(git2::Reference::is_valid_name(&format!("refs/heads/{branch}")));
     }
 
     /// Tests that invalid branch names return an error when they cannot be sanitised.
     #[rstest]
     #[case::empty("")]
     #[case::all_invalid_chars("@/.")]
-    fn test_build_branch_name_when_invalid(#[case] name: &str) {
-        let branch_name = build_branch_name("reflow-branches--", name);
-        assert!(branch_name.is_err(), "expected error, got: {:?}", branch_name.unwrap());
+    fn test_sanitize_branch_name_when_invalid(#[case] name: &str) {
+        let branch = sanitize_branch_name(name);
+        assert!(branch.is_err(), "expected error, got: {:?}", branch.unwrap());
     }
 
     /// Tests that paths are converted to relative to a given Git repository root.
@@ -738,6 +736,7 @@ mod tests {
     #[case::gitlab_enterprise_ssh("git@gitlab.org.com:axieum/git-reflow.git", "gitlab.org.com", "axieum", "git-reflow")]
     #[case::gitlab_enterprise_ssh_with_port("ssh://git@gitlab.org.com:2222/axieum/git-reflow.git", "gitlab.org.com", "axieum", "git-reflow")]
     #[case::gitlab_enterprise_https("https://gitlab.org.com/axieum/git-reflow.git", "gitlab.org.com", "axieum", "git-reflow")]
+    #[case::local_file("file://localhost/tmp/octocat/Hello-World.git", "localhost", "octocat", "Hello-World")]
     fn test_parse_remote_url(
         #[case] url: &str,
         #[case] expected_host: &str,
