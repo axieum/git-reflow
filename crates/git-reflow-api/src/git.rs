@@ -102,22 +102,29 @@ where
     T: AsRef<Path>,
     I: IntoIterator<Item = T>,
 {
-    let repo_dir = repo.workdir().context("repository has no working directory")?;
+    let repo_dir = repo
+        .workdir()
+        .context("repository has no working directory")?
+        .canonicalize()
+        .context("could not resolve repository directory")?;
     pathspecs
         .into_iter()
         .map(|path| {
             let path = path.as_ref();
             let relative = if path.is_absolute() {
-                path.strip_prefix(repo_dir)
-                    .with_context(|| format!("release file `{}` is outside the repository", path.display()))?
+                path.canonicalize()
+                    .with_context(|| format!("could not resolve file `{}`", path.display()))?
+                    .strip_prefix(&repo_dir)
+                    .with_context(|| format!("file `{}` is outside the repository", path.display()))?
+                    .to_path_buf()
             } else {
-                path
+                path.to_path_buf()
             };
             Ok(relative
                 .strip_prefix(".")
                 .ok()
                 .filter(|path| !path.as_os_str().is_empty())
-                .unwrap_or(relative)
+                .unwrap_or(&relative)
                 .to_path_buf())
         })
         .collect()
@@ -454,10 +461,11 @@ mod tests {
     #[test]
     fn test_paths_relative_to_repo() {
         // Create a Git repository.
-        let (_temp_dir, repo) = create_test_repo();
+        let (temp_dir, repo) = create_test_repo();
 
         // Create a nested path and test various absolute and relative paths.
         let relative = PathBuf::from("nested").join("release.toml");
+        temp_dir.child(&relative).write_str("version = '1.0.0'").unwrap();
         let paths = [
             repo.workdir().unwrap().join(&relative),
             PathBuf::from(".").join(&relative),
@@ -479,10 +487,12 @@ mod tests {
         let (_temp_dir, repo) = create_test_repo();
 
         // Create a path outside the repository root.
-        let outside = repo.workdir().unwrap().parent().unwrap().join("outside.toml");
+        let outside_dir = assert_fs::TempDir::new().unwrap();
+        let outside = outside_dir.child("outside.toml");
+        outside.write_str("version = '1.0.0'").unwrap();
 
         // Verify that an error is returned.
-        assert!(paths_relative_to_repo(&repo, &[outside]).is_err());
+        assert!(paths_relative_to_repo(&repo, &[outside.path()]).is_err());
     }
 
     /// Tests that a clean working directory passes.
