@@ -9,7 +9,7 @@ use crate::settings::AppConfig;
 use crate::strategy::BaseStrategy;
 use anyhow::{Context, anyhow, ensure};
 use std::path::PathBuf;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 /// Applies the release plan to the package manifest files and commits them.
 ///
@@ -79,26 +79,12 @@ pub async fn apply_release_plan(
             format!("{}{}", config.git.release_branch_prefix, guard.original_branch)
         };
         let pr_title = &releases[0].commit_message;
-        let pr_body = if config.git.separate_pull_requests {
+        let pr_body = if releases.len() == 1 {
             // Use the changelog Markdown for the single release as the pull request body.
             releases[0].changelog_md.clone()
         } else {
             // Use a summary of all changelog Markdowns for the multiple releases as the pull request body.
-            releases
-                .iter()
-                .map(|release| {
-                    format!(
-                        r#"<details>
-                        <summary>{}: v{}</summary>
-
-                        {}
-                        </details>
-                        "#,
-                        release.package_name, release.next_version, release.changelog_md
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n")
+            combine_changelogs_for_release_plan(releases)
         };
 
         // Create or reset the target branch for the release group.
@@ -190,7 +176,7 @@ pub async fn apply_release_plan(
     }
 
     // Reset the Git repository to the original branch and commit.
-    debug!(
+    trace!(
         "restoring to original branch `{}` and commit `{}`",
         guard.original_branch, guard.original_commit_id
     );
@@ -254,6 +240,27 @@ pub async fn write_package_release(
     Ok(changed_files)
 }
 
+/// Renders a summary of all package release changelogs in a given release plan as Markdown.
+///
+/// # Arguments
+///
+/// - `plan` - The release plan to combine changelogs for.
+///
+/// # Returns
+///
+/// The summary of all package release changelogs in the release plan as Markdown.
+pub fn combine_changelogs_for_release_plan(plan: &[PackageRelease]) -> String {
+    plan.iter()
+        .map(|release| {
+            format!(
+                "<details>\n<summary>{}: v{}</summary>\n\n{}\n\n</details>\n",
+                release.package_name, release.next_version, release.changelog_md
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +270,7 @@ mod tests {
     use git_reflow_fixtures::{add_origin_remote, project_repo};
     use git2::Repository;
     use httpmock::prelude::*;
+    use indoc::indoc;
     use rstest::rstest;
     use serde_json::json;
     #[cfg(unix)]
@@ -322,13 +330,13 @@ mod tests {
                 current_version: Some(semver::Version::parse("0.2.0").unwrap()),
                 next_version: semver::Version::parse("0.3.0").unwrap(),
                 commit_message: "chore: release v0.3.0".to_string(),
-                changelog_md: r#"## [0.3.0] - 2026-09-26
+                changelog_md: indoc! {r#"
+                    ## [0.3.0] - 2026-09-26
 
-                ### 🚀 Features
+                    ### 🚀 Features
 
-                - *(api)* Add a `subtract` function
-                - *(cli)* Print subtractions
-                "#
+                    - *(api)* Add a `subtract` function
+                    - *(cli)* Print subtractions"#}
                 .to_string(),
                 context: json!({}), // NB: `git-cliff` is not actually invoked, so an empty context will suffice.
             },
@@ -337,12 +345,12 @@ mod tests {
                 current_version: Some(semver::Version::parse("0.1.0").unwrap()),
                 next_version: semver::Version::parse("0.2.0").unwrap(),
                 commit_message: "chore(example-api): release v0.2.0".to_string(),
-                changelog_md: r#"## [0.2.0] - 2026-09-26
+                changelog_md: indoc! {r#"
+                    ## [0.2.0] - 2026-09-26
 
-                ### 🚀 Features
+                    ### 🚀 Features
 
-                - *(api)* Add a `subtract` function
-                "#
+                    - *(api)* Add a `subtract` function"#}
                 .to_string(),
                 context: json!({}),
             },
@@ -351,12 +359,12 @@ mod tests {
                 current_version: Some(semver::Version::parse("0.2.0").unwrap()),
                 next_version: semver::Version::parse("0.3.0").unwrap(),
                 commit_message: "chore(example-cli): release v0.3.0".to_string(),
-                changelog_md: r#"## [0.3.0] - 2026-09-26
+                changelog_md: indoc! {r#"
+                    ## [0.3.0] - 2026-09-26
 
-                ### 🚀 Features
+                    ### 🚀 Features
 
-                - *(cli)* Print subtractions
-                "#
+                    - *(cli)* Print subtractions"#}
                 .to_string(),
                 context: json!({}),
             },
@@ -478,13 +486,13 @@ mod tests {
                 current_version: Some(semver::Version::parse("0.2.0").unwrap()),
                 next_version: semver::Version::parse("0.3.0").unwrap(),
                 commit_message: "chore: release v0.3.0".to_string(),
-                changelog_md: r#"## [0.3.0] - 2026-09-26
+                changelog_md: indoc! {r#"
+                    ## [0.3.0] - 2026-09-26
 
-                ### 🚀 Features
+                    ### 🚀 Features
 
-                - *(api)* Add a `subtract` function
-                - *(cli)* Print subtractions
-                "#
+                    - *(api)* Add a `subtract` function
+                    - *(cli)* Print subtractions"#}
                 .to_string(),
                 context: json!({}), // NB: `git-cliff` is not actually invoked, so an empty context will suffice.
             },
@@ -493,12 +501,12 @@ mod tests {
                 current_version: Some(semver::Version::parse("0.1.0").unwrap()),
                 next_version: semver::Version::parse("0.2.0").unwrap(),
                 commit_message: "chore(example-api): release v0.2.0".to_string(),
-                changelog_md: r#"## [0.2.0] - 2026-09-26
+                changelog_md: indoc! {r#"
+                    ## [0.2.0] - 2026-09-26
 
-                ### 🚀 Features
+                    ### 🚀 Features
 
-                - *(api)* Add a `subtract` function
-                "#
+                    - *(api)* Add a `subtract` function"#}
                 .to_string(),
                 context: json!({}),
             },
@@ -507,12 +515,12 @@ mod tests {
                 current_version: Some(semver::Version::parse("0.2.0").unwrap()),
                 next_version: semver::Version::parse("0.3.0").unwrap(),
                 commit_message: "chore(example-cli): release v0.3.0".to_string(),
-                changelog_md: r#"## [0.3.0] - 2026-09-26
+                changelog_md: indoc! {r#"
+                    ## [0.3.0] - 2026-09-26
 
-                ### 🚀 Features
+                    ### 🚀 Features
 
-                - *(cli)* Print subtractions
-                "#
+                    - *(cli)* Print subtractions"#}
                 .to_string(),
                 context: json!({}),
             },
@@ -576,5 +584,68 @@ mod tests {
             .await
             .unwrap();
         assert!(prs.is_empty());
+    }
+
+    /// Tests that multiple changelogs in a release plan are summarised correctly in Markdown format.
+    #[test]
+    fn test_combine_changelogs_for_release_plan() {
+        let plan = vec![
+            PackageRelease {
+                package_name: "example-rust-workspace".to_string(),
+                current_version: Some(semver::Version::parse("0.2.0").unwrap()),
+                next_version: semver::Version::parse("0.3.0").unwrap(),
+                commit_message: "chore: release v0.3.0".to_string(),
+                changelog_md: indoc! {r#"
+                    ## [0.3.0] - 2026-09-26
+
+                    ### 🚀 Features
+
+                    - *(api)* Add a `subtract` function
+                    - *(cli)* Print subtractions"#}
+                .to_string(),
+                context: json!({}),
+            },
+            PackageRelease {
+                package_name: "example-api".to_string(),
+                current_version: Some(semver::Version::parse("0.1.0").unwrap()),
+                next_version: semver::Version::parse("0.2.0").unwrap(),
+                commit_message: "chore(example-api): release v0.2.0".to_string(),
+                changelog_md: indoc! {r#"
+                    ## [0.2.0] - 2026-09-26
+
+                    ### 🚀 Features
+
+                    - *(api)* Add a `subtract` function"#}
+                .to_string(),
+                context: json!({}),
+            },
+        ];
+
+        assert_eq!(
+            combine_changelogs_for_release_plan(&plan),
+            r#"<details>
+<summary>example-rust-workspace: v0.3.0</summary>
+
+## [0.3.0] - 2026-09-26
+
+### 🚀 Features
+
+- *(api)* Add a `subtract` function
+- *(cli)* Print subtractions
+
+</details>
+
+<details>
+<summary>example-api: v0.2.0</summary>
+
+## [0.2.0] - 2026-09-26
+
+### 🚀 Features
+
+- *(api)* Add a `subtract` function
+
+</details>
+"#,
+        );
     }
 }
