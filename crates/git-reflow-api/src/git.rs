@@ -1,7 +1,7 @@
 use anyhow::{Context, anyhow, bail, ensure};
 use git2::{Repository, StatusOptions};
 use std::path::{Path, PathBuf};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, trace, warn};
 
 /// Ensures that the Git working directory is clean (no uncommitted changes).
 ///
@@ -228,13 +228,20 @@ pub fn push_branch(repo: &Repository, branch_name: &str, force: bool) -> anyhow:
         "{}refs/heads/{branch_name}:refs/heads/{branch_name}",
         if force { "+" } else { "" }
     );
+    trace!(
+        "push refspec `{}` to remote `{}`",
+        refspec,
+        remote.url().unwrap_or_default()
+    );
     remote
         .push(&[&refspec], None)
-        .with_context(|| format!("failed to push branch `{branch_name}` to origin"))
+        .with_context(|| format!("failed to push branch `{branch_name}` to remote"))
 }
 
 /// A parsed Git remote URL containing the host, owner, and repository names.
 pub struct RemoteRef {
+    /// The full URL of the Git remote, e.g. `git@github.com:axieum/git-reflow.git`.
+    pub url: String,
     /// The host of the Git remote, e.g. `github.com`.
     pub host: String,
     /// The owner of the repository, e.g. `axieum`.
@@ -288,6 +295,7 @@ pub fn parse_remote_url(url: &str) -> anyhow::Result<RemoteRef> {
     }
 
     Ok(RemoteRef {
+        url: url.to_string(),
         host,
         owner: owner.to_string(),
         repo: repo.to_string(),
@@ -754,6 +762,7 @@ mod tests {
         #[case] expected_repo: &str,
     ) {
         let remote = parse_remote_url(url).unwrap();
+        assert_eq!(remote.url, url);
         assert_eq!(remote.host, expected_host);
         assert_eq!(remote.owner, expected_owner);
         assert_eq!(remote.repo, expected_repo);

@@ -146,10 +146,10 @@ pub async fn apply_release_plan(
 
         // Push the branch to the remote Git repository.
         if !dry_run {
-            debug!("push branch `{}`", branch_name);
+            debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
             push_branch(&repo, &branch_name, true)?;
         } else {
-            debug!("push branch `{}` (dry run)", branch_name);
+            debug!("push branch `{}` to remote `{}` (dry run)", branch_name, remote.url);
         }
 
         // Create or update the pull request for the branch.
