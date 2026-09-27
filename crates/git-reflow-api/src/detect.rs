@@ -14,8 +14,13 @@ use std::path::Path;
 ///   * [`RustStrategy`]
 ///     * `Cargo.toml`
 ///
+/// # Arguments
+///
+/// - `dir` - The directory to detect the release strategy for.
+///
 /// # Returns
-/// A release strategy if one is detected.
+///
+/// A result containing the detected release strategy, or an error if no inference could be made.
 pub fn detect_strategy<P: AsRef<Path>>(dir: &P) -> anyhow::Result<Strategy> {
     fs::read_dir(dir.as_ref())?
         .find_map(|entry| {

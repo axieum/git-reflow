@@ -40,9 +40,11 @@ impl AppConfig {
     /// Returns a given package configuration by its name.
     ///
     /// # Arguments
+    ///
     /// * `name` - The package name or `.` for root.
     ///
     /// # Returns
+    ///
     /// The package configuration if it exists.
     pub fn get_package(&self, name: &str) -> Option<&PackageConfig> {
         if name == "." {

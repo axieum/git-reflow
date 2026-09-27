@@ -18,7 +18,7 @@ pub struct PackageRelease {
     pub next_version: Version,
     /// The commit message for the package release.
     pub commit_message: String,
-    /// The rendered changelog markdown for the package.
+    /// The rendered changelog Markdown for the package.
     pub changelog_md: String,
     /// The `git-cliff` context for the package.
     #[serde(skip_serializing_if = "Value::is_null")]
@@ -65,7 +65,7 @@ pub async fn plan_releases(
             }
         };
 
-        // Parse the version and render the changelog markdown for this package.
+        // Parse the version and render the changelog Markdown for this package.
         let (current_version, next_version) = get_version_from_git_cliff_context(&context)?;
         let changelog_md = render_changelog_markdown(&context, None)?;
 

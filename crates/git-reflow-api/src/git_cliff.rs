@@ -48,10 +48,12 @@ impl CommandRunner for GitCliffRunner {
 /// > `git-cliff --include-path ${dir}/**/* --unreleased --bump --context`
 ///
 /// # Arguments
+///
 /// * `dir` - The path to scope the commits to.
 /// * `runner` - The `git-cliff` command runner.
 ///
 /// # Returns
+///
 /// A result containing the parsed `git-cliff` output context for unreleased changes.
 pub fn run_git_cliff(dir: &Path, runner: Option<&dyn CommandRunner>) -> anyhow::Result<Option<Value>> {
     // Prepare `git-cliff` arguments.
@@ -96,9 +98,14 @@ pub fn run_git_cliff(dir: &Path, runner: Option<&dyn CommandRunner>) -> anyhow::
 /// > `git-cliff --from-context - --prepend ${path} --latest << ${context}`
 ///
 /// # Arguments
+///
 /// * `path` - The path to write the changelog to.
 /// * `context` - The `git-cliff` context data.
 /// * `runner` - The `git-cliff` command runner.
+///
+/// # Returns
+///
+/// A result indicating whether the `git-cliff` context was successfully applied.
 pub fn apply_git_cliff_context(path: &Path, context: &Value, runner: Option<&dyn CommandRunner>) -> anyhow::Result<()> {
     // Ensure the changelog file exists, creating it if necessary.
     if !path.exists() {
@@ -128,14 +135,19 @@ pub fn apply_git_cliff_context(path: &Path, context: &Value, runner: Option<&dyn
     }
 }
 
-/// Spawns a [`git-cliff`](https://github.com/orhun/git-cliff) process and renders the markdown
+/// Spawns a [`git-cliff`](https://github.com/orhun/git-cliff) process and renders the Markdown
 /// changelog for the given context to a string.
 ///
 /// > `git-cliff --from-context - --output -`
 ///
 /// # Arguments
+///
 /// * `context` - The `git-cliff` context data.
 /// * `runner` - The `git-cliff` command runner.
+///
+/// # Returns
+///
+/// A result containing the rendered changelog Markdown for the given `git-cliff` context.
 pub fn render_changelog_markdown(context: &Value, runner: Option<&dyn CommandRunner>) -> anyhow::Result<String> {
     let context_json = serde_json::to_string(&[context]).context("failed to serialize context")?;
     let args = ["--from-context", "-", "--output", "-"];
@@ -157,9 +169,11 @@ pub fn render_changelog_markdown(context: &Value, runner: Option<&dyn CommandRun
 /// Returns the parsed [Semantic Version](https://semver.org/) from the `git-cliff` context.
 ///
 /// # Arguments
+///
 /// * `context` - The `git-cliff` context data.
 ///
 /// # Returns
+///
 /// A result containing the current (`$.previous.version`) and next (`$.version`)
 /// versions as parsed [Semantic Version](https://semver.org/).
 pub fn get_version_from_git_cliff_context(context: &Value) -> anyhow::Result<(Option<Version>, Version)> {
