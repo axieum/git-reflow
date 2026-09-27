@@ -8,13 +8,25 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     "url": "https://github.com/octocat/Hello-World/pull/1347",
     "head": "reflow--branches--main--example-rust-workspace",
     "base": "main",
-    "is_new": true
+    "is_new": true,
+    "packages": [
+      {
+        "name": "example-rust-workspace",
+        "version": "1.1.0"
+      }
+    ]
   },
   {
     "number": 1347,
     "url": "https://github.com/octocat/Hello-World/pull/1347",
     "head": "reflow--branches--main--example-api",
     "base": "main",
-    "is_new": true
+    "is_new": true,
+    "packages": [
+      {
+        "name": "example-api",
+        "version": "1.1.0"
+      }
+    ]
   }
 ]

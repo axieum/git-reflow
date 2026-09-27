@@ -1,5 +1,6 @@
 use crate::provider::github::GitHubProvider;
 use async_trait::async_trait;
+use semver::Version;
 use std::fmt;
 use std::fmt::Display;
 use std::str::FromStr;
@@ -29,6 +30,17 @@ pub struct PullRequest {
     pub base: String,
     /// Whether the pull request was created (true) or updated (false).
     pub is_new: bool,
+    /// A list of packages included in the pull request.
+    pub packages: Vec<PullRequestPackage>,
+}
+
+/// A package release included in a pull request.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct PullRequestPackage {
+    /// The name of the package.
+    pub name: String,
+    /// The next (target) version of the package.
+    pub version: Version,
 }
 
 #[async_trait]

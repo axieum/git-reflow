@@ -10,7 +10,7 @@ use tracing::debug;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct PackageRelease {
-    /// The package configuration.
+    /// The name of the package.
     pub package_name: String,
     /// The current version of the package, if it exists.
     pub current_version: Option<Version>,

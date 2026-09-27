@@ -114,6 +114,7 @@ impl BaseGitProvider for GitHubProvider {
                 head: head.to_string(),
                 base: base.to_string(),
                 is_new: false,
+                packages: vec![],
             });
         }
 
@@ -135,6 +136,7 @@ impl BaseGitProvider for GitHubProvider {
             head: head.to_string(),
             base: base.to_string(),
             is_new: true,
+            packages: vec![],
         })
     }
 }
@@ -241,6 +243,7 @@ pub(crate) mod tests {
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
                 is_new: true,
+                packages: vec![],
             }
         );
     }
@@ -291,6 +294,7 @@ pub(crate) mod tests {
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
                 is_new: false,
+                packages: vec![],
             }
         );
     }

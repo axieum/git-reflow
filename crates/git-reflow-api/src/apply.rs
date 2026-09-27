@@ -4,7 +4,7 @@ use crate::git::{
 };
 use crate::git_cliff::{CommandRunner, apply_git_cliff_context};
 use crate::plan::PackageRelease;
-use crate::provider::{BaseGitProvider, PullRequest};
+use crate::provider::{BaseGitProvider, PullRequest, PullRequestPackage};
 use crate::settings::AppConfig;
 use crate::strategy::BaseStrategy;
 use anyhow::{Context, anyhow, ensure};
@@ -144,7 +144,7 @@ pub async fn apply_release_plan(
                 "creating pull request: `{}` -> `{}`",
                 branch_name, guard.original_branch
             );
-            let pr = config
+            let mut pr = config
                 .git
                 .provider
                 .upsert_pull_request(
@@ -156,6 +156,13 @@ pub async fn apply_release_plan(
                     &pr_body,
                 )
                 .await?;
+            pr.packages = releases
+                .iter()
+                .map(|release| PullRequestPackage {
+                    name: release.package_name.clone(),
+                    version: release.next_version.clone(),
+                })
+                .collect();
             debug!(
                 "🔀 {} pull request #{}: {}",
                 if pr.is_new { "created" } else { "updated" },
@@ -171,6 +178,13 @@ pub async fn apply_release_plan(
                 head: branch_name,
                 base: guard.original_branch.clone(),
                 is_new: true,
+                packages: releases
+                    .iter()
+                    .map(|release| PullRequestPackage {
+                        name: release.package_name.clone(),
+                        version: release.next_version.clone(),
+                    })
+                    .collect(),
             });
         }
     }
@@ -272,6 +286,7 @@ mod tests {
     use httpmock::prelude::*;
     use indoc::indoc;
     use rstest::rstest;
+    use semver::Version;
     use serde_json::json;
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
@@ -394,6 +409,20 @@ mod tests {
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
                 is_new: true,
+                packages: vec![
+                    PullRequestPackage {
+                        name: "example-rust-workspace".to_string(),
+                        version: Version::parse("0.3.0").unwrap(),
+                    },
+                    PullRequestPackage {
+                        name: "example-api".to_string(),
+                        version: Version::parse("0.2.0").unwrap(),
+                    },
+                    PullRequestPackage {
+                        name: "example-cli".to_string(),
+                        version: Version::parse("0.3.0").unwrap(),
+                    },
+                ],
             }]
         );
     }
@@ -558,6 +587,10 @@ mod tests {
                     head: "reflow--branches--main--example-rust-workspace".to_string(),
                     base: "main".to_string(),
                     is_new: true,
+                    packages: vec![PullRequestPackage {
+                        name: "example-rust-workspace".to_string(),
+                        version: Version::parse("0.3.0").unwrap(),
+                    }],
                 },
                 PullRequest {
                     number: 1347, // NB: The mock server returns the same PR number for all three requests.
@@ -565,6 +598,10 @@ mod tests {
                     head: "reflow--branches--main--example-api".to_string(),
                     base: "main".to_string(),
                     is_new: true,
+                    packages: vec![PullRequestPackage {
+                        name: "example-api".to_string(),
+                        version: Version::parse("0.2.0").unwrap(),
+                    }],
                 },
                 PullRequest {
                     number: 1347, // NB: The mock server returns the same PR number for all three requests.
@@ -572,6 +609,10 @@ mod tests {
                     head: "reflow--branches--main--example-cli".to_string(),
                     base: "main".to_string(),
                     is_new: true,
+                    packages: vec![PullRequestPackage {
+                        name: "example-cli".to_string(),
+                        version: Version::parse("0.3.0").unwrap(),
+                    }],
                 },
             ]
         );
