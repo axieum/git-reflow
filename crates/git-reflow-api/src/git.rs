@@ -1,6 +1,7 @@
 use anyhow::{Context, anyhow, bail, ensure};
 use git2::{Repository, StatusOptions};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use tracing::{debug, error, trace, warn};
 
 /// Ensures that the Git working directory is clean (no uncommitted changes).
@@ -213,6 +214,9 @@ where
 
 /// Pushes the specified branch to the `origin` remote.
 ///
+/// NB: This function spawns the `git` CLI as a child process to ensure that
+///     the push respects the user's Git configuration, e.g. authentication.
+///
 /// # Arguments
 ///
 /// - `repo` - The Git repository to push the branch from.
@@ -223,19 +227,34 @@ where
 ///
 /// A result indicating whether the push was successful or not.
 pub fn push_branch(repo: &Repository, branch_name: &str, force: bool) -> anyhow::Result<()> {
-    let mut remote = repo.find_remote("origin").context("failed to find origin remote")?;
+    // Prepare `git` arguments.
+    let workdir = repo.workdir().unwrap_or(repo.path());
     let refspec = format!(
         "{}refs/heads/{branch_name}:refs/heads/{branch_name}",
         if force { "+" } else { "" }
     );
-    trace!(
-        "push refspec `{}` to remote `{}`",
-        refspec,
-        remote.url().unwrap_or_default()
-    );
-    remote
-        .push(&[&refspec], None)
-        .with_context(|| format!("failed to push branch `{branch_name}` to remote"))
+
+    // Invoke the `git` command.
+    // NB: We use the `git` CLI here to ensure that the push respects the user's Git configuration, e.g. authentication.
+    trace!("$ git push origin {}", refspec);
+    let child = Command::new("git")
+        .current_dir(workdir) // NB: Set both the current directory and `-C`; better safe than sorry.
+        .arg("-C")
+        .arg(workdir)
+        .args(["push", "origin", &refspec])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn `git` process")?;
+    let output = child.wait_with_output().context("failed to wait for `git` process")?;
+
+    // Check the `git` output.
+    if output.status.success() {
+        trace!("↳ {}", str::from_utf8(&output.stdout)?);
+        Ok(())
+    } else {
+        bail!("git error: {}", str::from_utf8(&output.stderr)?);
+    }
 }
 
 /// A parsed Git remote URL containing the host, owner, and repository names.
