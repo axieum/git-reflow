@@ -58,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
                     .add_directive("hyper_rustls=warn".parse().unwrap())
                     .add_directive("hyper_util=warn".parse().unwrap())
                     .add_directive("octocrab=warn".parse().unwrap())
+                    .add_directive("rustls=warn".parse().unwrap())
                     .add_directive("tower=warn".parse().unwrap())
             }),
         )
