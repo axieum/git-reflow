@@ -1,8 +1,12 @@
+use crate::git::paths_relative_to_repo;
 use crate::provider::{BaseGitProvider, PullRequest};
 use anyhow::Context;
 use async_trait::async_trait;
+use base64::{Engine, engine::general_purpose::STANDARD};
+use git2::{Pathspec, PathspecFlags, Status, StatusOptions};
 use octocrab::Octocrab;
 use octocrab::params::State;
+use serde_json::json;
 use std::env;
 use std::sync::OnceLock;
 use tracing::trace;
@@ -66,6 +70,191 @@ impl GitHubProvider {
         // Build the Octocrab client once and return it.
         let client = builder.build().context("failed to build octocrab client")?;
         Ok(self.client.get_or_init(|| client))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_commit_on_branch(
+        &self,
+        owner: &str,
+        repo_name: &str,
+        repo: &git2::Repository,
+        branch_name: &str,
+        message: &str,
+        body: Option<&str>,
+        pathspecs: &[&str],
+    ) -> anyhow::Result<git2::Oid> {
+        #[derive(Debug, serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CreateCommitOnBranchMutation {
+            input: CreateCommitOnBranchInput,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CreateCommitOnBranchInput {
+            branch: CommittableBranch,
+            expected_head_oid: String,
+            message: CommitMessage,
+            file_changes: FileChanges,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CommittableBranch {
+            repository_name_with_owner: String,
+            branch_name: String,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        struct CommitMessage {
+            headline: String,
+            body: Option<String>,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        struct FileChanges {
+            additions: Vec<FileAddition>,
+            deletions: Vec<FileDeletion>,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        struct FileAddition {
+            path: String,
+            contents: String,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        struct FileDeletion {
+            path: String,
+        }
+
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CreateCommitOnBranchResponse {
+            create_commit_on_branch: CreateCommitOnBranchPayload,
+        }
+
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CreateCommitOnBranchPayload {
+            commit: Commit,
+        }
+
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Commit {
+            oid: String,
+        }
+
+        let client = self.client()?;
+
+        // Find the expected head OID of the branch.
+        let expected_head_oid = repo
+            .find_reference(&format!("refs/heads/{branch_name}"))
+            .context("failed to find branch reference")?
+            .target()
+            .context("failed to get branch target OID")?
+            .to_string();
+
+        // Prepare the file changes for the commit.
+        let workdir = repo.workdir().context("repository has no working directory")?;
+        let mut additions: Vec<FileAddition> = Vec::new();
+        let mut deletions: Vec<FileDeletion> = Vec::new();
+        if !pathspecs.is_empty() {
+            // Ensure that the pathspecs are relative to the repository root.
+            let specs = paths_relative_to_repo(repo, pathspecs)?;
+            let pathspec = Pathspec::new(specs)?;
+
+            // Include untracked files and recurse into untracked directories to capture all changes.
+            let mut options = StatusOptions::new();
+            options
+                .include_untracked(true)
+                .recurse_untracked_dirs(true)
+                .renames_head_to_index(true)
+                .renames_index_to_workdir(true);
+
+            // For each status entry, determine if it is an addition or deletion.
+            for entry in repo.statuses(Some(&mut options))?.iter() {
+                let old_path = entry
+                    .head_to_index()
+                    .or_else(|| entry.index_to_workdir())
+                    .and_then(|delta| delta.old_file().path());
+                let new_path = entry
+                    .index_to_workdir()
+                    .or_else(|| entry.head_to_index())
+                    .and_then(|delta| delta.new_file().path());
+                if old_path.is_some_and(|path| pathspec.matches_path(path, PathspecFlags::DEFAULT))
+                    && new_path.is_some_and(|path| pathspec.matches_path(path, PathspecFlags::DEFAULT))
+                {
+                    let status = entry.status();
+
+                    // If the file is deleted or renamed, add it to the deletions list.
+                    if status.intersects(
+                        Status::INDEX_DELETED | Status::WT_DELETED | Status::INDEX_RENAMED | Status::WT_RENAMED,
+                    ) {
+                        let old_path = old_path.context("deleted file has no path")?;
+                        deletions.push(FileDeletion {
+                            path: old_path
+                                .to_str()
+                                .context("deleted file path is not valid UTF-8")?
+                                .to_string(),
+                        });
+                    }
+
+                    // If the file is new, modified, or renamed, add it to the additions list with its base64 contents.
+                    if status.intersects(
+                        Status::INDEX_NEW
+                            | Status::INDEX_MODIFIED
+                            | Status::INDEX_RENAMED
+                            | Status::INDEX_TYPECHANGE
+                            | Status::WT_NEW
+                            | Status::WT_MODIFIED
+                            | Status::WT_RENAMED
+                            | Status::WT_TYPECHANGE,
+                    ) {
+                        let new_path = new_path.context("added file has no path")?;
+                        additions.push(FileAddition {
+                            path: new_path
+                                .to_str()
+                                .context("added file path is not valid UTF-8")?
+                                .to_string(),
+                            contents: STANDARD.encode(
+                                std::fs::read(workdir.join(new_path))
+                                    .with_context(|| format!("failed to read file `{}`", new_path.display()))?,
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Construct the GraphQL mutation payload.
+        let payload = CreateCommitOnBranchMutation {
+            input: CreateCommitOnBranchInput {
+                branch: CommittableBranch {
+                    repository_name_with_owner: format!("{owner}/{repo_name}"),
+                    branch_name: branch_name.to_string(),
+                },
+                expected_head_oid,
+                file_changes: FileChanges { additions, deletions },
+                message: CommitMessage {
+                    headline: message.to_string(),
+                    body: body.map(|s| s.to_string()),
+                },
+            },
+        };
+
+        // Execute the GraphQL mutation to create the commit on the branch.
+        trace!("execute GraphQL mutation `createCommitOnBranch` with: {payload:#?}");
+        let response: CreateCommitOnBranchResponse = client
+            .graphql(&json!({
+                "query": "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+                "variables": payload,
+            }))
+            .await?;
+
+        // Return the OID of the newly created commit.
+        Ok(git2::Oid::from_str(&response.create_commit_on_branch.commit.oid)?)
     }
 }
 
@@ -144,8 +333,11 @@ impl BaseGitProvider for GitHubProvider {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use assert_fs::{TempDir, prelude::*};
+    use git2::Repository;
     use httpmock::prelude::*;
     use rstest::{fixture, rstest};
+    use std::path::Path;
 
     /// A test fixture for a default GitHub provider.
     #[fixture]
@@ -296,6 +488,95 @@ pub(crate) mod tests {
                 is_new: false,
                 packages: vec![],
             }
+        );
+    }
+
+    /// Tests that a commit is created on GitHub against the given branch name.
+    #[rstest]
+    #[tokio::test]
+    async fn test_create_commit_on_branch(provider: GitHubProvider) {
+        // Initialise a new Git repository.
+        let temp_dir = TempDir::new().unwrap();
+        let repo = Repository::init(&temp_dir).unwrap();
+
+        // Configure the Git author.
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@localhost").unwrap();
+
+        // Create some files in the repository and commit them.
+        for name in ["old.txt", "deleted.txt", "modified.txt", "skipped.txt"] {
+            temp_dir.child(name).write_str("original").unwrap();
+        }
+        crate::git::commit(&repo, ["."], "initial").unwrap();
+        let head_oid = repo.head().unwrap().target().unwrap();
+        let branch_name = repo.head().unwrap().shorthand().unwrap().to_string();
+
+        // Modify the files to simulate additions, deletions, and renames.
+        temp_dir.child("modified.txt").write_str("updated").unwrap();
+        temp_dir.child("skipped.txt").write_str("not included").unwrap();
+        temp_dir.child("assets").create_dir_all().unwrap();
+        temp_dir
+            .child("assets")
+            .child("image.bin")
+            .write_binary(&[0, 255, 10])
+            .unwrap();
+        std::fs::remove_file(temp_dir.child("deleted.txt")).unwrap();
+        std::fs::rename(temp_dir.child("old.txt"), temp_dir.child("renamed.txt")).unwrap();
+        let mut index = repo.index().unwrap();
+        index.remove_path(Path::new("old.txt")).unwrap();
+        index.add_path(Path::new("renamed.txt")).unwrap();
+        index.write().unwrap();
+
+        // Set up a mock server to simulate the GitHub API.
+        let server = mock_octocrab(&provider).await;
+        let graphql_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/graphql")
+                .json_body(json!({
+                    "query": "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+                    "variables": {
+                        "input": {
+                            "branch": {
+                                "repositoryNameWithOwner": "octocat/Hello-World",
+                                "branchName": branch_name,
+                            },
+                            "expectedHeadOid": head_oid.to_string(),
+                            "message": {
+                                "headline": "feat",
+                                "body": null
+                            },
+                            "fileChanges": {
+                                "additions": [
+                                    { "path": "assets/image.bin", "contents": "AP8K" },
+                                    { "path": "modified.txt", "contents": "dXBkYXRlZA==" },
+                                    { "path": "renamed.txt", "contents": "b3JpZ2luYWw=" }
+                                ],
+                                "deletions": [
+                                    { "path": "deleted.txt" },
+                                    { "path": "old.txt" }
+                                ]
+                            }
+                        }
+                    }
+                }));
+            then.status(200).header("content-type", "application/json").body(
+                r#"{"data":{"createCommitOnBranch":{"commit":{"oid":"0123456789abcdef0123456789abcdef01234567"}}}}"#,
+            );
+        });
+
+        // Create a commit on the branch.
+        let pathspecs = ["old.txt", "deleted.txt", "modified.txt", "assets/*"];
+        let oid = provider
+            .create_commit_on_branch("octocat", "Hello-World", &repo, &branch_name, "feat", None, &pathspecs)
+            .await
+            .unwrap();
+
+        // Ensure the commit was created successfully.
+        graphql_mock.assert_async().await;
+        assert_eq!(
+            oid,
+            git2::Oid::from_str("0123456789abcdef0123456789abcdef01234567").unwrap(),
         );
     }
 }
