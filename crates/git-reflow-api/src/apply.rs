@@ -4,6 +4,7 @@ use crate::git::{
 };
 use crate::git_cliff::{CommandRunner, apply_git_cliff_context};
 use crate::plan::PackageRelease;
+use crate::provider::GitProvider::GitHub;
 use crate::provider::{BaseGitProvider, PullRequest, PullRequestPackage};
 use crate::settings::AppConfig;
 use crate::strategy::BaseStrategy;
@@ -122,21 +123,56 @@ pub async fn apply_release_plan(
         }
 
         // Commit the changes to the branch.
-        if !dry_run {
-            debug!("commit changes for branch `{}`", branch_name);
-            let commit_id = commit(&repo, &changed_files, pr_title)?;
-            debug!("✅ created commit: {} ({})", &pr_title, commit_id);
-        } else {
-            debug!("✅ created commit `{}` (dry run)", &pr_title);
-        }
+        debug!("commit changes to branch `{}`", branch_name);
+        match &config.git.provider {
+            // For GitHub, create the commit via the GitHub API, so that the commit is signed by them.
+            GitHub(provider) => {
+                // Push the branch to the remote Git repository.
+                if !dry_run {
+                    debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
+                    push_branch(&repo, &branch_name, true)?;
+                } else {
+                    debug!("push branch `{}` to remote `{}` (dry run)", branch_name, remote.url);
+                }
 
-        // Push the branch to the remote Git repository.
-        if !dry_run {
-            debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
-            push_branch(&repo, &branch_name, true)?;
-        } else {
-            debug!("push branch `{}` to remote `{}` (dry run)", branch_name, remote.url);
-        }
+                // Commit the changes to the branch via GitHub API.
+                if !dry_run {
+                    let commit_id = provider
+                        .create_commit_on_branch(
+                            &remote.owner,
+                            &remote.repo,
+                            &repo,
+                            &branch_name,
+                            pr_title,
+                            None,
+                            &changed_files,
+                        )
+                        .await?;
+                    debug!("✅ created commit: {} ({})", &pr_title, commit_id);
+                } else {
+                    debug!("✅ created commit `{}` (dry run)", &pr_title);
+                }
+            }
+            // For the rest, commit the changes directly to the local Git repository.
+            #[allow(unreachable_patterns)]
+            _ => {
+                // Commit the changes to the branch.
+                if !dry_run {
+                    let commit_id = commit(&repo, &changed_files, pr_title)?;
+                    debug!("✅ created commit: {} ({})", &pr_title, commit_id);
+                } else {
+                    debug!("✅ created commit `{}` (dry run)", &pr_title);
+                }
+
+                // Push the branch to the remote Git repository.
+                if !dry_run {
+                    debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
+                    push_branch(&repo, &branch_name, true)?;
+                } else {
+                    debug!("push branch `{}` to remote `{}` (dry run)", branch_name, remote.url);
+                }
+            }
+        };
 
         // Create or update the pull request for the branch.
         if !dry_run {
@@ -388,9 +424,7 @@ mod tests {
         let head = repo.head().unwrap().target().unwrap();
 
         // Call `apply_release_plan` with the release plan.
-        let prs = apply_release_plan(&config, &plan, false, Some(&cliff_runner))
-            .await
-            .unwrap();
+        let prs = apply_release_plan(&config, &plan, false, Some(&cliff_runner)).await;
 
         // Verify the Git repository state was restored, and that the release branch was pushed up.
         assert_eq!(repo.head().unwrap().target().unwrap(), head);
@@ -402,7 +436,7 @@ mod tests {
         list_mock.assert_async().await;
         create_mock.assert_calls_async(1).await;
         assert_eq!(
-            prs,
+            prs.unwrap(),
             vec![PullRequest {
                 number: 1347,
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
@@ -558,9 +592,7 @@ mod tests {
         let head = repo.head().unwrap().target().unwrap();
 
         // Call `apply_release_plan` with the release plan.
-        let prs = apply_release_plan(&config, &plan, false, Some(&cliff_runner))
-            .await
-            .unwrap();
+        let prs = apply_release_plan(&config, &plan, false, Some(&cliff_runner)).await;
 
         // Verify the Git repository state was restored, and that the release branches were pushed up.
         assert_eq!(repo.head().unwrap().target().unwrap(), head);
@@ -579,7 +611,7 @@ mod tests {
             mock.assert_async().await;
         }
         assert_eq!(
-            prs,
+            prs.unwrap(),
             vec![
                 PullRequest {
                     number: 1347,

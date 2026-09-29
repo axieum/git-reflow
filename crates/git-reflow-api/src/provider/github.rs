@@ -8,6 +8,7 @@ use octocrab::Octocrab;
 use octocrab::params::State;
 use serde_json::json;
 use std::env;
+use std::path::Path;
 use std::sync::OnceLock;
 use tracing::trace;
 
@@ -72,8 +73,25 @@ impl GitHubProvider {
         Ok(self.client.get_or_init(|| client))
     }
 
+    /// Creates a commit via GitHub on the given branch with the specified commit message and file changes.
+    ///
+    /// https://docs.github.com/en/graphql/reference/commits#mutation-createcommitonbranch
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner of the GitHub repository (user or organization).
+    /// * `repo_name` - The name of the GitHub repository.
+    /// * `repo` - The local Git repository.
+    /// * `branch_name` - The name of the branch to commit to.
+    /// * `message` - The commit message headline.
+    /// * `body` - An optional commit message body.
+    /// * `pathspecs` - A list of file paths/globs to stage and commit.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the Git object ID (OID) of the new commit.
     #[allow(clippy::too_many_arguments)]
-    pub async fn create_commit_on_branch(
+    pub async fn create_commit_on_branch<T, I>(
         &self,
         owner: &str,
         repo_name: &str,
@@ -81,8 +99,12 @@ impl GitHubProvider {
         branch_name: &str,
         message: &str,
         body: Option<&str>,
-        pathspecs: &[&str],
-    ) -> anyhow::Result<git2::Oid> {
+        pathspecs: I,
+    ) -> anyhow::Result<git2::Oid>
+    where
+        T: AsRef<Path>,
+        I: IntoIterator<Item = T>,
+    {
         #[derive(Debug, serde::Serialize)]
         #[serde(rename_all = "camelCase")]
         struct CreateCommitOnBranchMutation {
@@ -160,7 +182,7 @@ impl GitHubProvider {
         let workdir = repo.workdir().context("repository has no working directory")?;
         let mut additions: Vec<FileAddition> = Vec::new();
         let mut deletions: Vec<FileDeletion> = Vec::new();
-        if !pathspecs.is_empty() {
+        {
             // Ensure that the pathspecs are relative to the repository root.
             let specs = paths_relative_to_repo(repo, pathspecs)?;
             let pathspec = Pathspec::new(specs)?;
@@ -184,7 +206,7 @@ impl GitHubProvider {
                     .or_else(|| entry.head_to_index())
                     .and_then(|delta| delta.new_file().path());
                 if old_path.is_some_and(|path| pathspec.matches_path(path, PathspecFlags::DEFAULT))
-                    && new_path.is_some_and(|path| pathspec.matches_path(path, PathspecFlags::DEFAULT))
+                    || new_path.is_some_and(|path| pathspec.matches_path(path, PathspecFlags::DEFAULT))
                 {
                     let status = entry.status();
 
@@ -421,14 +443,13 @@ pub(crate) mod tests {
                 "chore: release v1.0.0",
                 "...",
             )
-            .await
-            .unwrap();
+            .await;
 
         // Ensure the pull request was created successfully.
         list_mock.assert_async().await;
         create_mock.assert_async().await;
         assert_eq!(
-            pr,
+            pr.unwrap(),
             PullRequest {
                 number: 1347,
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
@@ -472,14 +493,13 @@ pub(crate) mod tests {
                 "chore: release v1.0.0",
                 "...",
             )
-            .await
-            .unwrap();
+            .await;
 
         // Ensure the existing pull request was updated successfully.
         list_mock.assert_async().await;
         update_mock.assert_async().await;
         assert_eq!(
-            pr,
+            pr.unwrap(),
             PullRequest {
                 number: 1347,
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
@@ -569,13 +589,12 @@ pub(crate) mod tests {
         let pathspecs = ["old.txt", "deleted.txt", "modified.txt", "assets/*"];
         let oid = provider
             .create_commit_on_branch("octocat", "Hello-World", &repo, &branch_name, "feat", None, &pathspecs)
-            .await
-            .unwrap();
+            .await;
 
         // Ensure the commit was created successfully.
         graphql_mock.assert_async().await;
         assert_eq!(
-            oid,
+            oid.unwrap(),
             git2::Oid::from_str("0123456789abcdef0123456789abcdef01234567").unwrap(),
         );
     }
