@@ -1,5 +1,5 @@
 use anyhow::{Context, anyhow, bail, ensure};
-use git2::{Repository, StatusOptions};
+use git2::{DiffOptions, Repository, StatusOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tracing::{debug, error, trace, warn};
@@ -48,7 +48,7 @@ pub fn get_dirty_files(repo: &Repository) -> anyhow::Result<Vec<String>> {
         .collect::<Vec<_>>())
 }
 
-/// Sanitises a valid Git branch name.
+/// Sanitises a valid Git branch name by:
 ///
 ///   * Replacing non-alphanumeric characters with dashes;
 ///   * Collapsing multiple dashes into one;
@@ -166,6 +166,61 @@ pub fn create_or_reset_branch(repo: &Repository, name: &str, commit_id: git2::Oi
     Ok(())
 }
 
+/// Checks if two references point to commits with identical tree content.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to check.
+/// * `source_ref` - The source reference to compare.
+/// * `target_ref` - The target reference to compare.
+///
+/// # Returns
+///
+/// A result of whether the two references point to commits with identical tree content.
+pub fn trees_match(repo: &Repository, source_ref: &str, target_ref: &str) -> anyhow::Result<bool> {
+    // Resolve the source reference to a commit.
+    let source_commit = repo
+        .revparse_single(source_ref)
+        .with_context(|| format!("failed to find source reference `{source_ref}`"))?
+        .peel_to_commit()
+        .with_context(|| format!("failed to peel source reference `{source_ref}` to commit"))?;
+
+    // Try to resolve the target reference to a commit.
+    // NB: If the target reference does not exist yet, assume the trees do not match.
+    let target_commit = match repo.revparse_single(target_ref) {
+        Ok(obj) => obj
+            .peel_to_commit()
+            .with_context(|| format!("failed to peel target reference `{target_ref}` to commit"))?,
+        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(false),
+        Err(e) => bail!(e),
+    };
+
+    // If the commits are identical, then the trees match.
+    if source_commit.id() == target_commit.id() {
+        return Ok(true);
+    }
+
+    // If the tree IDs are identical, then the trees match.
+    let source_tree_id = source_commit.tree_id();
+    let target_tree_id = target_commit.tree_id();
+    if source_tree_id == target_tree_id {
+        return Ok(true);
+    }
+
+    // Otherwise, we need to check the diff between the two trees.
+    let source_tree = source_commit
+        .tree()
+        .with_context(|| format!("failed to get tree for source commit `{source_ref}`"))?;
+    let target_tree = target_commit
+        .tree()
+        .with_context(|| format!("failed to get tree for target commit `{target_ref}`"))?;
+    let mut diff_opts = DiffOptions::new();
+    diff_opts.include_untracked(false);
+
+    let diff = repo.diff_tree_to_tree(Some(&source_tree), Some(&target_tree), Some(&mut diff_opts))?;
+    Ok(diff.deltas().count() == 0)
+}
+
 /// Stages and commits the specified changes in the Git repository.
 ///
 /// # Arguments
@@ -212,6 +267,54 @@ where
     .context("could not commit changes")
 }
 
+/// Fetches the specified branch from the `origin` remote.
+///
+/// NB: This function spawns the `git` CLI as a child process to ensure that
+///     the fetch respects the user's Git configuration, e.g. authentication.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to fetch the branch into.
+/// * `remote_name` - The name of the remote to fetch from, e.g. `origin`.
+/// * `branch_name` - The name of the branch to fetch.
+///
+/// # Returns
+///
+/// A result containing the remote branch reference if it exists, e.g. `refs/remotes/origin/feature`.
+pub fn fetch_branch(repo: &Repository, remote_name: &str, branch_name: &str) -> anyhow::Result<Option<String>> {
+    // Prepare `git` arguments.
+    let workdir = repo.workdir().unwrap_or(repo.path());
+    let refspec = format!("refs/heads/{branch_name}");
+
+    // Invoke the `git` command.
+    // NB: We use the `git` CLI here to ensure that the fetch respects the user's Git configuration, e.g. authentication.
+    trace!("$ git fetch {} {}", remote_name, refspec);
+    let child = Command::new("git")
+        .current_dir(workdir) // NB: Set both the current directory and `-C`; better safe than sorry.
+        .arg("-C")
+        .arg(workdir)
+        .args(["fetch", remote_name, &refspec])
+        .arg("--porcelain")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn `git` process")?;
+    let output = child.wait_with_output().context("failed to wait for `git` process")?;
+
+    // Check the `git` output.
+    if output.status.success() {
+        trace!("↳ {}", str::from_utf8(&output.stdout)?);
+        Ok(Some(format!("refs/remotes/{remote_name}/{branch_name}")))
+    } else {
+        // If the branch does not exist on the remote, return `None`.
+        let stderr = str::from_utf8(&output.stderr).unwrap_or_default();
+        if stderr.contains("couldn't find remote ref") {
+            return Ok(None);
+        }
+        bail!("git error ({}): {}", output.status, stderr);
+    }
+}
+
 /// Pushes the specified branch to the `origin` remote.
 ///
 /// NB: This function spawns the `git` CLI as a child process to ensure that
@@ -253,7 +356,7 @@ pub fn push_branch(repo: &Repository, branch_name: &str, force: bool) -> anyhow:
         trace!("↳ {}", str::from_utf8(&output.stdout)?);
         Ok(())
     } else {
-        bail!("git error: {}", str::from_utf8(&output.stderr)?);
+        bail!("git error ({}): {}", output.status, str::from_utf8(&output.stderr)?);
     }
 }
 
@@ -614,6 +717,42 @@ mod tests {
         assert!(repo.find_commit(commit_id).is_ok());
     }
 
+    /// Tests that a branch is fetched from the origin remote.
+    #[test]
+    fn test_fetch_branch() {
+        // Create a local and remote Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+        let (_remote_temp_dir, remote_repo) = create_test_repo();
+        repo.remote("origin", remote_repo.path().to_str().unwrap()).unwrap();
+
+        // Create a branch on the remote.
+        let base = remote_repo.head().unwrap().target().unwrap();
+        create_or_reset_branch(&remote_repo, "feature", base).unwrap();
+
+        // Fetch the branch from the remote.
+        let remote_ref = fetch_branch(&repo, "origin", "feature").unwrap();
+        assert_eq!(remote_ref.unwrap(), "refs/remotes/origin/feature");
+
+        // Verify that the local repository has the remote branch reference.
+        assert_eq!(
+            repo.find_reference("refs/remotes/origin/feature").unwrap().target(),
+            Some(base)
+        );
+    }
+
+    /// Tests that a branch that does not exist on the origin remote is handled correctly.
+    #[test]
+    fn test_fetch_branch_when_it_does_not_exist() {
+        // Create a local and remote Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+        let (_remote_temp_dir, remote_repo) = create_test_repo();
+        repo.remote("origin", remote_repo.path().to_str().unwrap()).unwrap();
+
+        // Fetch the branch from the remote.
+        let remote_ref = fetch_branch(&repo, "origin", "feature").unwrap();
+        assert!(remote_ref.is_none());
+    }
+
     /// Tests that a branch is pushed to the origin remote.
     #[test]
     fn test_push_branch() {
@@ -748,6 +887,68 @@ mod tests {
             "base"
         );
         assert!(repo.statuses(None).unwrap().is_empty());
+    }
+
+    /// Tests that two commits with identical tree contents are considered matching.
+    #[test]
+    fn test_trees_match() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+
+        // Create a base commit with a file.
+        temp_dir.child("file.txt").write_str("base content").unwrap();
+        let base_commit = commit(&repo, &["file.txt"], "base").unwrap();
+
+        // Create a second commit with the same file content.
+        temp_dir.child("file.txt").write_str("base content").unwrap();
+        let same_commit = commit(&repo, &["file.txt"], "same").unwrap();
+
+        // Verify that the trees match for the same content.
+        assert!(trees_match(&repo, &format!("{}", base_commit), &format!("{}", same_commit)).unwrap());
+    }
+
+    /// Tests that two commits with different tree contents are considered not matching.
+    #[test]
+    fn test_trees_match_not() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+
+        // Create a base commit with a file.
+        let base_commit = commit(&repo, &["file.txt"], "base").unwrap();
+
+        // Create a second commit with different file content.
+        temp_dir.child("file.txt").write_str("different content").unwrap();
+        let different_commit = commit(&repo, &["file.txt"], "different").unwrap();
+
+        // Verify that the trees do not match for different content.
+        assert!(!trees_match(&repo, &format!("{}", base_commit), &format!("{}", different_commit)).unwrap());
+    }
+
+    /// Tests that two commits with the same commit ID are considered matching.
+    #[test]
+    fn test_trees_match_when_same_commit() {
+        // Create a Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+
+        // Create a base commit with a file.
+        let base_commit = commit(&repo, &["file.txt"], "base").unwrap();
+
+        // Verify that the trees match when comparing the same commit.
+        assert!(trees_match(&repo, &format!("{}", base_commit), &format!("{}", base_commit)).unwrap());
+    }
+
+    /// Tests that trees do not match when the target reference does not exist yet.
+    #[test]
+    fn test_trees_match_when_target_ref_does_not_exist() {
+        // Create a Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+
+        // Create a base commit with a file.
+        let base_commit = commit(&repo, &["file.txt"], "base").unwrap();
+
+        // Verify that the trees match when the target ref does not exist.
+        // NB: We assume that a non-existent ref is treated as an empty tree, which when pushed to will match.
+        assert!(!trees_match(&repo, &format!("{}", base_commit), "nonexistent-ref").unwrap());
     }
 
     /// Tests that a remote URLs are parsed correctly.

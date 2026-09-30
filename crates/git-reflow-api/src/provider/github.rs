@@ -3,6 +3,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use octocrab::Octocrab;
 use octocrab::params::State;
+use std::borrow::Cow;
 use std::env;
 use std::sync::OnceLock;
 use tracing::trace;
@@ -83,6 +84,7 @@ impl BaseGitProvider for GitHubProvider {
         let client = self.client()?;
         let pulls = client.pulls(owner, repo);
 
+        // Find an open pull request with the same head and base branches.
         let head_filter = format!("{owner}:{head}");
         trace!("find open pull requests with head: {head_filter}; base: {base}");
         let prs = pulls
@@ -97,23 +99,30 @@ impl BaseGitProvider for GitHubProvider {
 
         // If a pull request already exists, update it.
         if let Some(pr) = prs.items.first() {
-            trace!("updating existing pull request #{}", pr.number);
-            let updated = pulls
-                .update(pr.number)
-                .title(title)
-                .body(body)
-                .send()
-                .await
-                .context("failed to update pull request")?;
+            let updated = if pr.title.as_deref() != Some(title) || pr.body.as_deref() != Some(body) {
+                trace!("updating existing pull request #{}", pr.number);
+                let updated = pulls
+                    .update(pr.number)
+                    .title(title)
+                    .body(body)
+                    .send()
+                    .await
+                    .context("failed to update pull request")?;
+                Cow::Owned(updated)
+            } else {
+                trace!("existing pull request #{} is already up-to-date", pr.number);
+                Cow::Borrowed(pr)
+            };
             return Ok(PullRequest {
                 number: updated.number,
                 url: updated
                     .html_url
+                    .as_ref()
                     .map(|url| url.to_string())
                     .unwrap_or_else(|| format!("https://{}/{}/{}/pull/{}", self.host, owner, repo, updated.number)),
                 head: head.to_string(),
                 base: base.to_string(),
-                is_new: false,
+                existing: true,
                 packages: vec![],
             });
         }
@@ -135,7 +144,7 @@ impl BaseGitProvider for GitHubProvider {
                 .unwrap_or_else(|| format!("https://{}/{}/{}/pull/{}", self.host, owner, repo, created.number)),
             head: head.to_string(),
             base: base.to_string(),
-            is_new: true,
+            existing: false,
             packages: vec![],
         })
     }
@@ -229,22 +238,21 @@ pub(crate) mod tests {
                 "chore: release v1.0.0",
                 "...",
             )
-            .await
-            .unwrap();
+            .await;
 
         // Ensure the pull request was created successfully.
         list_mock.assert_async().await;
         create_mock.assert_async().await;
         assert_eq!(
-            pr,
+            pr.unwrap(),
             PullRequest {
                 number: 1347,
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
-                is_new: true,
+                existing: false,
                 packages: vec![],
-            }
+            },
         );
     }
 
@@ -280,22 +288,66 @@ pub(crate) mod tests {
                 "chore: release v1.0.0",
                 "...",
             )
-            .await
-            .unwrap();
+            .await;
 
         // Ensure the existing pull request was updated successfully.
         list_mock.assert_async().await;
         update_mock.assert_async().await;
         assert_eq!(
-            pr,
+            pr.unwrap(),
             PullRequest {
                 number: 1347,
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
-                is_new: false,
+                existing: true,
                 packages: vec![],
-            }
+            },
+        );
+    }
+
+    /// Tests that an existing pull request is not updated when it is already up-to-date.
+    #[rstest]
+    #[tokio::test]
+    async fn test_upsert_pull_request_does_not_update_if_already_up_to_date(provider: GitHubProvider) {
+        // Set up a mock server to simulate the GitHub API.
+        let server = mock_octocrab(&provider).await;
+        let list_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/repos/octocat/Hello-World/pulls")
+                .query_param("head", "octocat:reflow--branches--main")
+                .query_param("base", "main");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!("../../tests/fixtures/github_pulls_list.json"));
+        });
+
+        // Update an existing pull request.
+        let pr = provider
+            .upsert_pull_request(
+                "octocat",
+                "Hello-World",
+                "reflow--branches--main",
+                "main",
+                // NB: This title and body match the existing PR title in the fixture.
+                "Amazing new feature",
+                "Please pull these awesome changes in!",
+            )
+            .await;
+
+        // Ensure the existing pull request remains unchanged.
+        // NB: We expect it to fetch the existing pull request, but not update it.
+        list_mock.assert_async().await;
+        assert_eq!(
+            pr.unwrap(),
+            PullRequest {
+                number: 1347,
+                url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                head: "reflow--branches--main".to_string(),
+                base: "main".to_string(),
+                existing: true,
+                packages: vec![],
+            },
         );
     }
 }

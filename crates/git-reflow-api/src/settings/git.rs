@@ -1,5 +1,5 @@
-use crate::provider::github::GitHubProvider;
 use crate::provider::GitProvider;
+use crate::provider::github::GitHubProvider;
 
 /// The Git provider configuration.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

@@ -28,8 +28,8 @@ pub struct PullRequest {
     pub head: String,
     /// The name of the branch the changes are pulled into, e.g. `main`.
     pub base: String,
-    /// Whether the pull request was created (true) or updated (false).
-    pub is_new: bool,
+    /// Whether the pull request was updated (true) or created (false).
+    pub existing: bool,
     /// A list of packages included in the pull request.
     pub packages: Vec<PullRequestPackage>,
 }

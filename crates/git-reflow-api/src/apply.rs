@@ -1,6 +1,6 @@
 use crate::git::{
-    BranchGuard, commit, create_or_reset_branch, ensure_clean_working_directory, get_origin_remote, push_branch,
-    sanitize_branch_name,
+    BranchGuard, commit, create_or_reset_branch, ensure_clean_working_directory, fetch_branch, get_origin_remote,
+    push_branch, sanitize_branch_name, trees_match,
 };
 use crate::git_cliff::{CommandRunner, apply_git_cliff_context};
 use crate::plan::PackageRelease;
@@ -68,7 +68,7 @@ pub async fn apply_release_plan(
         // Prepare the branch name, pull request title & description for the release group.
         let branch_name = build_release_branch_name(config, &releases[0].package_name, &guard.original_branch)?;
         let pr_title = &releases[0].commit_message;
-        let pr_body = build_changelog_summary(&releases);
+        let pr_body = build_changelog_summary(releases);
 
         // Create or reset the target branch for the release group.
         if !dry_run {
@@ -113,10 +113,17 @@ pub async fn apply_release_plan(
             debug!("✅ created commit `{}` (dry run)", &pr_title);
         }
 
-        // Push the branch to the remote Git repository.
+        // Push the branch to the remote Git repository, if it is not already up-to-date with the remote.
         if !dry_run {
-            debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
-            push_branch(&repo, &branch_name, true)?;
+            if should_push_to_remote(&repo, &branch_name, pr_title)? {
+                debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
+                push_branch(&repo, &branch_name, true)?;
+            } else {
+                debug!(
+                    "branch `{}` is already up-to-date with remote `{}`",
+                    branch_name, remote.url
+                );
+            }
         } else {
             debug!("push branch `{}` to remote `{}` (dry run)", branch_name, remote.url);
         }
@@ -148,7 +155,7 @@ pub async fn apply_release_plan(
                 .collect();
             debug!(
                 "🔀 {} pull request #{}: {}",
-                if pr.is_new { "created" } else { "updated" },
+                if pr.existing { "updated" } else { "created" },
                 pr.number,
                 pr.url,
             );
@@ -160,7 +167,7 @@ pub async fn apply_release_plan(
                 url: String::new(),
                 head: branch_name,
                 base: guard.original_branch.clone(),
-                is_new: true,
+                existing: false,
                 packages: releases
                     .iter()
                     .map(|release| PullRequestPackage {
@@ -237,6 +244,38 @@ pub async fn write_package_release(
     Ok(changed_files)
 }
 
+/// Determines whether the release branch should be pushed to the remote Git repository by:
+///
+///   * Fetching the remote branch, if it exists;
+///   * Checking if the remote branch's commit message is different;
+///   * Checking if the remote branch's tree is different from the local branch.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository.
+/// * `branch_name` - The name of the release branch.
+/// * `commit_message` - The commit message for the release branch.
+///
+/// # Returns
+///
+/// A result containing whether the release branch should be pushed to the remote Git repository.
+pub fn should_push_to_remote(repo: &git2::Repository, branch_name: &str, commit_message: &str) -> anyhow::Result<bool> {
+    // Fetch the remote branch.
+    debug!("fetch branch `{branch_name}` from origin remote");
+    match fetch_branch(repo, "origin", branch_name)? {
+        Some(remote_ref) => {
+            let remote_commit = repo
+                .find_reference(&remote_ref)
+                .context("could not find remote reference")?
+                .peel_to_commit()
+                .context("could not peel remote branch to commit")?;
+            Ok(remote_commit.message().ok() != Some(commit_message)
+                || !trees_match(repo, &format!("refs/heads/{branch_name}"), &remote_ref)?)
+        }
+        None => Ok(true),
+    }
+}
+
 /// Builds the release branch name for a given package release.
 ///
 /// # Arguments
@@ -249,20 +288,18 @@ pub async fn write_package_release(
 ///
 /// A result containing the release branch name, e.g. `reflow--branches--main--example-package`.
 pub fn build_release_branch_name(config: &AppConfig, package_name: &str, base: &str) -> anyhow::Result<String> {
-    Ok(
-        if config.git.separate_pull_requests {
-            // For separate pull requests, append the package name to the branch name to avoid conflicts.
-            format!(
-                "{}{}--{}",
-                config.git.release_branch_prefix,
-                base,
-                sanitize_branch_name(package_name)?,
-            )
-        } else {
-            // For a combined pull request, the target branch name is sufficient enough.
-            format!("{}{}", config.git.release_branch_prefix, base)
-        }
-    )
+    Ok(if config.git.separate_pull_requests {
+        // For separate pull requests, append the package name to the branch name to avoid conflicts.
+        format!(
+            "{}{}--{}",
+            config.git.release_branch_prefix,
+            base,
+            sanitize_branch_name(package_name)?,
+        )
+    } else {
+        // For a combined pull request, the target branch name is sufficient enough.
+        format!("{}{}", config.git.release_branch_prefix, base)
+    })
 }
 
 /// Renders a summary of all package release changelogs in a given release plan as Markdown.
@@ -425,7 +462,7 @@ mod tests {
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
-                is_new: true,
+                existing: false,
                 packages: vec![
                     PullRequestPackage {
                         name: "example-rust-workspace".to_string(),
@@ -603,7 +640,7 @@ mod tests {
                     url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
                     head: "reflow--branches--main--example-rust-workspace".to_string(),
                     base: "main".to_string(),
-                    is_new: true,
+                    existing: false,
                     packages: vec![PullRequestPackage {
                         name: "example-rust-workspace".to_string(),
                         version: Version::parse("0.3.0").unwrap(),
@@ -614,7 +651,7 @@ mod tests {
                     url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
                     head: "reflow--branches--main--example-api".to_string(),
                     base: "main".to_string(),
-                    is_new: true,
+                    existing: false,
                     packages: vec![PullRequestPackage {
                         name: "example-api".to_string(),
                         version: Version::parse("0.2.0").unwrap(),
@@ -625,13 +662,107 @@ mod tests {
                     url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
                     head: "reflow--branches--main--example-cli".to_string(),
                     base: "main".to_string(),
-                    is_new: true,
+                    existing: false,
                     packages: vec![PullRequestPackage {
                         name: "example-cli".to_string(),
                         version: Version::parse("0.3.0").unwrap(),
                     }],
                 },
             ]
+        );
+    }
+
+    /// Tests that pushes to a release branch is skipped when the branch is already up-to-date with the remote.
+    #[rstest]
+    #[tokio::test]
+    async fn test_apply_release_plan_when_remote_is_up_to_date(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+    ) {
+        // Create a Git repository and add an `origin` remote so that release branches can be pushed to it.
+        let (project_dir, repo) = project_repo;
+        let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+
+        // Load the configuration for the project repository.
+        std::env::set_current_dir(&project_dir).unwrap();
+        let mut config = crate::settings::load(None).unwrap();
+
+        // Set up a mock server to simulate the GitHub API.
+        let provider = GitHubProvider::default();
+        let server = mock_octocrab(&provider).await;
+        let list_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/repos/octocat/Hello-World/pulls")
+                .query_param("head", "octocat:reflow--branches--main")
+                .query_param("base", "main");
+            then.status(200).header("content-type", "application/json").body("[]");
+        });
+        let create_mock = server.mock(|when, then| {
+            when.method(POST).path("/repos/octocat/Hello-World/pulls");
+            then.status(201)
+                .header("content-type", "application/json")
+                .body(include_str!("../tests/fixtures/github_pulls_retrieve.json"));
+        });
+        config.git.provider = GitProvider::GitHub(provider);
+
+        // Commit the current files to the `main` branch.
+        repo.set_head("refs/heads/main").unwrap();
+        crate::git::commit(&repo, &["."], "chore: initial commit").unwrap();
+
+        // Set up a mock `git-cliff` runner to simulate writing the changelog files.
+        let mut cliff_runner = MockGitCliffRunner::new();
+        cliff_runner.expect_run().returning(move |_, _| {
+            Ok(Output {
+                status: std::process::ExitStatus::from_raw(0), // success.
+                stdout: vec![],
+                stderr: vec![],
+            })
+        });
+
+        // Prepare a release plan.
+        let plan = vec![PackageRelease {
+            package_name: "example-rust-workspace".to_string(),
+            current_version: Some(semver::Version::parse("0.2.0").unwrap()),
+            next_version: semver::Version::parse("0.3.0").unwrap(),
+            commit_message: "chore: release v0.3.0".to_string(),
+            changelog_md: indoc! {r#"
+                ## [0.3.0] - 2026-09-26
+
+                ### 🚀 Features
+
+                - *(api)* Add a `subtract` function
+                - *(cli)* Print subtractions"#}
+            .to_string(),
+            context: json!({}), // NB: `git-cliff` is not actually invoked, so an empty context will suffice.
+        }];
+
+        let head = repo.head().unwrap().target().unwrap();
+
+        // Call `apply_release_plan` with the release plan.
+        let prs = apply_release_plan(&config, &plan, false, Some(&cliff_runner))
+            .await
+            .unwrap();
+
+        // Verify the Git repository state was restored, and that the release branch was pushed up.
+        assert_eq!(repo.head().unwrap().target().unwrap(), head);
+        assert!(repo.statuses(None).unwrap().is_empty());
+        assert!(remote_repo.find_reference("refs/heads/reflow--branches--main").is_ok());
+
+        // Verify that a pull request was created for the unchanged release branch.
+        list_mock.assert_async().await;
+        create_mock.assert_async().await;
+        assert_eq!(
+            prs,
+            vec![PullRequest {
+                number: 1347,
+                url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                head: "reflow--branches--main".to_string(),
+                base: "main".to_string(),
+                existing: false,
+                packages: vec![PullRequestPackage {
+                    name: "example-rust-workspace".to_string(),
+                    version: Version::parse("0.3.0").unwrap(),
+                }],
+            }],
         );
     }
 
@@ -642,6 +773,30 @@ mod tests {
             .await
             .unwrap();
         assert!(prs.is_empty());
+    }
+
+    /// Tests that the release branch should be pushed to the remote when it does not exist yet.
+    #[test]
+    fn test_should_push_to_remote_when_the_branch_is_new() {
+        todo!();
+    }
+
+    /// Tests that the release branch should be pushed to the remote when the commit message has changed.
+    #[test]
+    fn test_should_push_to_remote_when_commit_message_changed() {
+        todo!();
+    }
+
+    /// Tests that the release branch should be pushed to the remote when the tree contents have changed.
+    #[test]
+    fn test_should_push_to_remote_when_tree_changed() {
+        todo!();
+    }
+
+    /// Tests that the release branch should not be pushed to the remote when it is already up-to-date.
+    #[test]
+    fn test_should_push_to_remote_not_when_up_to_date() {
+        todo!();
     }
 
     /// Tests that the release branch name is built correctly for a combined release.
@@ -664,22 +819,20 @@ mod tests {
     /// Tests that a single changelog in a release plan is summarised correctly in Markdown format.
     #[test]
     fn test_build_changelog_summary_for_single_release() {
-        let plan = vec![
-            PackageRelease {
-                package_name: "example-cli".to_string(),
-                current_version: Some(semver::Version::parse("0.1.0").unwrap()),
-                next_version: semver::Version::parse("0.2.0").unwrap(),
-                commit_message: "chore(example-cli): release v0.2.0".to_string(),
-                changelog_md: indoc! {r#"
+        let plan = vec![PackageRelease {
+            package_name: "example-cli".to_string(),
+            current_version: Some(semver::Version::parse("0.1.0").unwrap()),
+            next_version: semver::Version::parse("0.2.0").unwrap(),
+            commit_message: "chore(example-cli): release v0.2.0".to_string(),
+            changelog_md: indoc! {r#"
                     ## [0.2.0] - 2026-09-26
 
                     ### 🚀 Features
 
                     - *(cli)* Print the subtraction of two numbers"#}
-                    .to_string(),
-                context: json!({}),
-            },
-        ];
+            .to_string(),
+            context: json!({}),
+        }];
 
         assert_eq!(
             build_changelog_summary(&plan),
