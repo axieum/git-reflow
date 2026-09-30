@@ -49,12 +49,12 @@ pub trait BaseGitProvider {
     ///
     /// # Arguments
     ///
-    /// - `owner` - The owner of the repository (user or organization).
-    /// - `repo` - The name of the repository.
-    /// - `head` - The name of the branch where your changes are implemented.
-    /// - `base` - The name of the branch you want the changes pulled into.
-    /// - `title` - The title of the pull request.
-    /// - `body` - The body content of the pull request.
+    /// * `owner` - The owner of the repository (user or organization).
+    /// * `repo` - The name of the repository.
+    /// * `head` - The name of the branch where your changes are implemented.
+    /// * `base` - The name of the branch you want the changes pulled into.
+    /// * `title` - The title of the pull request.
+    /// * `body` - The body content of the pull request.
     ///
     /// # Returns
     ///

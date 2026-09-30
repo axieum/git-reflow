@@ -8,7 +8,7 @@ use tracing::{debug, error, trace, warn};
 ///
 /// # Arguments
 ///
-/// - `repo` - The Git repository to check.
+/// * `repo` - The Git repository to check.
 ///
 /// # Returns
 ///
@@ -92,8 +92,8 @@ pub fn sanitize_branch_name(name: &str) -> anyhow::Result<String> {
 ///
 /// # Arguments
 ///
-/// - `repo` - The Git repository.
-/// - `pathspecs` - The paths to make relative to the repository.
+/// * `repo` - The Git repository.
+/// * `pathspecs` - The paths to make relative to the repository.
 ///
 /// # Returns
 ///
@@ -135,9 +135,9 @@ where
 ///
 /// # Arguments
 ///
-/// - `repo` - The Git repository to create the branch in.
-/// - `name` - The name of the branch to create.
-/// - `commit_id` - The commit ID to create the branch at.
+/// * `repo` - The Git repository to create the branch in.
+/// * `name` - The name of the branch to create.
+/// * `commit_id` - The commit ID to create the branch at.
 ///
 /// # Returns
 ///
@@ -219,9 +219,9 @@ where
 ///
 /// # Arguments
 ///
-/// - `repo` - The Git repository to push the branch from.
-/// - `branch_name` - The name of the branch to push.
-/// - `force` - Whether to force push the branch.
+/// * `repo` - The Git repository to push the branch from.
+/// * `branch_name` - The name of the branch to push.
+/// * `force` - Whether to force push the branch.
 ///
 /// # Returns
 ///

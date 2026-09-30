@@ -16,7 +16,7 @@ use std::path::Path;
 ///
 /// # Arguments
 ///
-/// - `dir` - The directory to detect the release strategy for.
+/// * `dir` - The directory to detect the release strategy for.
 ///
 /// # Returns
 ///

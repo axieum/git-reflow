@@ -1,7 +1,8 @@
+use crate::provider::github::GitHubProvider;
 use crate::provider::GitProvider;
 
 /// The Git provider configuration.
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct GitConfig {
     /// The type of Git provider.
@@ -42,4 +43,15 @@ fn default_commit_message_pattern() -> String {
 /// Returns the default value for `$.release_branch_prefix`.
 fn default_release_branch_prefix() -> String {
     String::from("reflow--branches--")
+}
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self {
+            provider: GitProvider::GitHub(GitHubProvider::default()),
+            release_branch_prefix: default_release_branch_prefix(),
+            commit_message_pattern: default_commit_message_pattern(),
+            separate_pull_requests: false,
+        }
+    }
 }

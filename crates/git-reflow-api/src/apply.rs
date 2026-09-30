@@ -15,10 +15,10 @@ use tracing::{debug, trace, warn};
 ///
 /// # Arguments
 ///
-/// - `config` - The app configuration.
-/// - `plan` - The release plan to apply.
-/// - `dry_run` - If true, do not actually write the changes or commit them.
-/// - `cliff_runner` - An optional command runner for executing `git-cliff` commands.
+/// * `config` - The app configuration.
+/// * `plan` - The release plan to apply.
+/// * `dry_run` - If true, do not actually write the changes or commit them.
+/// * `cliff_runner` - An optional command runner for executing `git-cliff` commands.
 ///
 /// # Returns
 ///
@@ -66,26 +66,9 @@ pub async fn apply_release_plan(
         }
 
         // Prepare the branch name, pull request title & description for the release group.
-        let branch_name = if config.git.separate_pull_requests {
-            // For separate pull requests, append the package name to the branch name to avoid conflicts.
-            format!(
-                "{}{}--{}",
-                config.git.release_branch_prefix,
-                guard.original_branch,
-                sanitize_branch_name(&releases[0].package_name)?,
-            )
-        } else {
-            // For a combined pull request, the target branch name is sufficient enough.
-            format!("{}{}", config.git.release_branch_prefix, guard.original_branch)
-        };
+        let branch_name = build_release_branch_name(config, &releases[0].package_name, &guard.original_branch)?;
         let pr_title = &releases[0].commit_message;
-        let pr_body = if releases.len() == 1 {
-            // Use the changelog Markdown for the single release as the pull request body.
-            releases[0].changelog_md.clone()
-        } else {
-            // Use a summary of all changelog Markdowns for the multiple releases as the pull request body.
-            combine_changelogs_for_release_plan(releases)
-        };
+        let pr_body = build_changelog_summary(&releases);
 
         // Create or reset the target branch for the release group.
         if !dry_run {
@@ -115,7 +98,7 @@ pub async fn apply_release_plan(
             ensure!(
                 !files.is_empty(),
                 "no changes were made for package `{}`",
-                release.package_name
+                release.package_name,
             );
 
             changed_files.extend(files);
@@ -123,7 +106,7 @@ pub async fn apply_release_plan(
 
         // Commit the changes to the branch.
         if !dry_run {
-            debug!("commit changes for branch `{}`", branch_name);
+            debug!("commit changes to branch `{}`", branch_name);
             let commit_id = commit(&repo, &changed_files, pr_title)?;
             debug!("✅ created commit: {} ({})", &pr_title, commit_id);
         } else {
@@ -210,10 +193,10 @@ pub async fn apply_release_plan(
 ///
 /// # Arguments
 ///
-/// - `config` - The app configuration.
-/// - `release` - The package release information.
-/// - `dry_run` - If true, do not actually write the changes or commit them.
-/// - `cliff_runner` - An optional command runner for executing `git-cliff` commands.
+/// * `config` - The app configuration.
+/// * `release` - The package release information.
+/// * `dry_run` - If true, do not actually write the changes or commit them.
+/// * `cliff_runner` - An optional command runner for executing `git-cliff` commands.
 ///
 /// # Returns
 ///
@@ -254,25 +237,59 @@ pub async fn write_package_release(
     Ok(changed_files)
 }
 
+/// Builds the release branch name for a given package release.
+///
+/// # Arguments
+///
+/// * `config` - The app configuration.
+/// * `package_name` - The name of the package to be released.
+/// * `base` - The base branch name to use for the release branch.
+///
+/// # Returns
+///
+/// A result containing the release branch name, e.g. `reflow--branches--main--example-package`.
+pub fn build_release_branch_name(config: &AppConfig, package_name: &str, base: &str) -> anyhow::Result<String> {
+    Ok(
+        if config.git.separate_pull_requests {
+            // For separate pull requests, append the package name to the branch name to avoid conflicts.
+            format!(
+                "{}{}--{}",
+                config.git.release_branch_prefix,
+                base,
+                sanitize_branch_name(package_name)?,
+            )
+        } else {
+            // For a combined pull request, the target branch name is sufficient enough.
+            format!("{}{}", config.git.release_branch_prefix, base)
+        }
+    )
+}
+
 /// Renders a summary of all package release changelogs in a given release plan as Markdown.
 ///
 /// # Arguments
 ///
-/// - `plan` - The release plan to combine changelogs for.
+/// * `plan` - The release plan to build a changelog summary for.
 ///
 /// # Returns
 ///
 /// The summary of all package release changelogs in the release plan as Markdown.
-pub fn combine_changelogs_for_release_plan(plan: &[PackageRelease]) -> String {
-    plan.iter()
-        .map(|release| {
-            format!(
-                "<details>\n<summary>{}: v{}</summary>\n\n{}\n\n</details>\n",
-                release.package_name, release.next_version, release.changelog_md
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+pub fn build_changelog_summary(plan: &[PackageRelease]) -> String {
+    if plan.len() == 1 {
+        // Use the changelog Markdown for the single release as the pull request body.
+        plan[0].changelog_md.clone()
+    } else {
+        // Use a summary of all changelog Markdowns for the multiple releases as the pull request body.
+        plan.iter()
+            .map(|release| {
+                format!(
+                    "<details>\n<summary>{}: v{}</summary>\n\n{}\n\n</details>\n",
+                    release.package_name, release.next_version, release.changelog_md
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 #[cfg(test)]
@@ -627,9 +644,56 @@ mod tests {
         assert!(prs.is_empty());
     }
 
+    /// Tests that the release branch name is built correctly for a combined release.
+    #[test]
+    fn test_build_release_branch_name() {
+        let config = AppConfig::default();
+        let branch_name = build_release_branch_name(&config, "example-package", "main").unwrap();
+        assert_eq!(branch_name, "reflow--branches--main");
+    }
+
+    /// Tests that the release branch name is built correctly when separate pull requests are enabled.
+    #[test]
+    fn test_build_release_branch_name_with_separate_prs() {
+        let mut config = AppConfig::default();
+        config.git.separate_pull_requests = true;
+        let branch_name = build_release_branch_name(&config, "example-package", "main").unwrap();
+        assert_eq!(branch_name, "reflow--branches--main--example-package");
+    }
+
+    /// Tests that a single changelog in a release plan is summarised correctly in Markdown format.
+    #[test]
+    fn test_build_changelog_summary_for_single_release() {
+        let plan = vec![
+            PackageRelease {
+                package_name: "example-cli".to_string(),
+                current_version: Some(semver::Version::parse("0.1.0").unwrap()),
+                next_version: semver::Version::parse("0.2.0").unwrap(),
+                commit_message: "chore(example-cli): release v0.2.0".to_string(),
+                changelog_md: indoc! {r#"
+                    ## [0.2.0] - 2026-09-26
+
+                    ### 🚀 Features
+
+                    - *(cli)* Print the subtraction of two numbers"#}
+                    .to_string(),
+                context: json!({}),
+            },
+        ];
+
+        assert_eq!(
+            build_changelog_summary(&plan),
+            r#"## [0.2.0] - 2026-09-26
+
+### 🚀 Features
+
+- *(cli)* Print the subtraction of two numbers"#,
+        );
+    }
+
     /// Tests that multiple changelogs in a release plan are summarised correctly in Markdown format.
     #[test]
-    fn test_combine_changelogs_for_release_plan() {
+    fn test_build_changelog_summary() {
         let plan = vec![
             PackageRelease {
                 package_name: "example-rust-workspace".to_string(),
@@ -663,7 +727,7 @@ mod tests {
         ];
 
         assert_eq!(
-            combine_changelogs_for_release_plan(&plan),
+            build_changelog_summary(&plan),
             r#"<details>
 <summary>example-rust-workspace: v0.3.0</summary>
 

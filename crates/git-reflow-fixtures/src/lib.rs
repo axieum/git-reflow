@@ -92,10 +92,10 @@ pub fn project_repo(#[default(".")] name: &str) -> (TempDir, Repository) {
 ///
 /// # Arguments
 ///
-/// - `local_repo` - The local Git repository to add the remote to.
-/// - `remote_name` - The name of the remote to be added, e.g. `origin`.
-/// - `owner` - The owner of the remote repository, i.e. the GitHub username.
-/// - `repo_name` - The name of the remote repository, e.g. `my-repo`.
+/// * `local_repo` - The local Git repository to add the remote to.
+/// * `remote_name` - The name of the remote to be added, e.g. `origin`.
+/// * `owner` - The owner of the remote repository, i.e. the GitHub username.
+/// * `repo_name` - The name of the remote repository, e.g. `my-repo`.
 ///
 /// # Returns
 ///
