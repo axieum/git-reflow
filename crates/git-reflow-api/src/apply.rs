@@ -690,23 +690,33 @@ mod tests {
         let provider = GitHubProvider::default();
         let server = mock_octocrab(&provider).await;
         let list_mock = server.mock(|when, then| {
+            let mut body: serde_json::Value =
+                serde_json::from_str(include_str!("../tests/fixtures/github_pulls_list.json")).unwrap();
+            body[0]["title"] = serde_json::Value::String("chore: release v0.3.0".to_string());
+            body[0]["body"] = serde_json::Value::String(
+                indoc! {r#"
+                    ## [0.3.0] - 2026-09-26
+
+                    ### 🚀 Features
+
+                    - *(api)* Add a `subtract` function
+                    - *(cli)* Print subtractions"#}
+                .to_string(),
+            );
+
             when.method(GET)
                 .path("/repos/octocat/Hello-World/pulls")
                 .query_param("head", "octocat:reflow--branches--main")
                 .query_param("base", "main");
-            then.status(200).header("content-type", "application/json").body("[]");
-        });
-        let create_mock = server.mock(|when, then| {
-            when.method(POST).path("/repos/octocat/Hello-World/pulls");
-            then.status(201)
+            then.status(200)
                 .header("content-type", "application/json")
-                .body(include_str!("../tests/fixtures/github_pulls_retrieve.json"));
+                .json_body(body);
         });
         config.git.provider = GitProvider::GitHub(provider);
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        crate::git::commit(&repo, &["."], "chore: initial commit").unwrap();
+        commit(&repo, &["."], "chore: initial commit").unwrap();
 
         // Set up a mock `git-cliff` runner to simulate writing the changelog files.
         let mut cliff_runner = MockGitCliffRunner::new();
@@ -737,19 +747,33 @@ mod tests {
 
         let head = repo.head().unwrap().target().unwrap();
 
+        // Create and push a release branch with the same release message and file contents.
+        create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
+        let changed_files = write_package_release(&config, &plan[0], false, Some(&cliff_runner))
+            .await
+            .unwrap();
+        let remote_commit_id = commit(&repo, &changed_files, &plan[0].commit_message).unwrap();
+        push_branch(&repo, "reflow--branches--main", false).unwrap();
+        create_or_reset_branch(&repo, "main", head).unwrap(); // NB: Switch back to the `main` branch.
+
         // Call `apply_release_plan` with the release plan.
         let prs = apply_release_plan(&config, &plan, false, Some(&cliff_runner))
             .await
             .unwrap();
 
-        // Verify the Git repository state was restored, and that the release branch was pushed up.
+        // Verify the Git repository state was restored, and that the remote release branch was not changed.
         assert_eq!(repo.head().unwrap().target().unwrap(), head);
         assert!(repo.statuses(None).unwrap().is_empty());
-        assert!(remote_repo.find_reference("refs/heads/reflow--branches--main").is_ok());
+        let remote_commit = remote_repo
+            .find_reference("refs/heads/reflow--branches--main")
+            .unwrap()
+            .peel_to_commit()
+            .unwrap();
+        assert_eq!(remote_commit.id(), remote_commit_id);
 
-        // Verify that a pull request was created for the unchanged release branch.
+        // Verify that the existing release branch and its pull request remain unchanged.
+        // NB: We expect the exisitng pull request to be fetched, but no creation or patch requests to be made.
         list_mock.assert_async().await;
-        create_mock.assert_async().await;
         assert_eq!(
             prs,
             vec![PullRequest {
@@ -757,7 +781,7 @@ mod tests {
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
-                existing: false,
+                existing: true,
                 packages: vec![PullRequestPackage {
                     name: "example-rust-workspace".to_string(),
                     version: Version::parse("0.3.0").unwrap(),
