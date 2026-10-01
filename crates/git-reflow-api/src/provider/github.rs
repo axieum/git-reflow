@@ -329,7 +329,7 @@ pub(crate) mod tests {
                 "Hello-World",
                 "reflow--branches--main",
                 "main",
-                // NB: This title and body match the existing PR title in the fixture.
+                // NB: This title and body match the existing PR in the fixture.
                 "Amazing new feature",
                 "Please pull these awesome changes in!",
             )

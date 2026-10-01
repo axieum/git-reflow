@@ -334,7 +334,7 @@ mod tests {
     use super::*;
     use crate::git_cliff::tests::MockGitCliffRunner;
     use crate::provider::{GitProvider, github::GitHubProvider, github::tests::mock_octocrab};
-    use assert_fs::TempDir;
+    use assert_fs::{TempDir, prelude::*};
     use git_reflow_fixtures::{add_origin_remote, project_repo};
     use git2::Repository;
     use httpmock::prelude::*;
@@ -380,7 +380,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        crate::git::commit(&repo, &["."], "chore: initial commit").unwrap();
+        commit(&repo, &["."], "chore: initial commit").unwrap();
 
         // Set up a mock `git-cliff` runner to simulate writing the changelog files.
         let mut cliff_runner = MockGitCliffRunner::new();
@@ -550,7 +550,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        crate::git::commit(&repo, &["."], "chore: initial commit").unwrap();
+        commit(&repo, &["."], "chore: initial commit").unwrap();
 
         // Set up a mock `git-cliff` runner to simulate writing the changelog files.
         let mut cliff_runner = MockGitCliffRunner::new();
@@ -776,27 +776,101 @@ mod tests {
     }
 
     /// Tests that the release branch should be pushed to the remote when it does not exist yet.
-    #[test]
-    fn test_should_push_to_remote_when_the_branch_is_new() {
-        todo!();
+    #[rstest]
+    fn test_should_push_to_remote_when_the_branch_is_new(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+    ) {
+        // Create a Git repository and add an `origin` remote so that release branches can be pushed to it.
+        let (_project_dir, repo) = project_repo;
+        let (_remote_dir, _remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+
+        // Commit the current files to the `main` branch.
+        repo.set_head("refs/heads/main").unwrap();
+        let head = commit(&repo, &["."], "chore: initial commit").unwrap();
+
+        // Create a release branch without pushing it to the remote.
+        create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
+        commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+
+        // Verify that the new release branch should be pushed to the remote.
+        assert!(should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0").unwrap());
     }
 
     /// Tests that the release branch should be pushed to the remote when the commit message has changed.
-    #[test]
-    fn test_should_push_to_remote_when_commit_message_changed() {
-        todo!();
+    #[rstest]
+    fn test_should_push_to_remote_when_commit_message_changed(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+    ) {
+        // Create a Git repository and add an `origin` remote so that release branches can be pushed to it.
+        let (_project_dir, repo) = project_repo;
+        let (_remote_dir, _remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+
+        // Commit the current files to the `main` branch.
+        repo.set_head("refs/heads/main").unwrap();
+        let head = commit(&repo, &["."], "chore: initial commit").unwrap();
+
+        // Create and push a release branch to the remote.
+        create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
+        commit(&repo, &["."], "chore: release v0.2.0").unwrap();
+        push_branch(&repo, "reflow--branches--main", false).unwrap();
+
+        // Commit a new release message without changing the tree contents.
+        commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+
+        // Verify that the release branch should be pushed when the commit message has changed.
+        assert!(should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0").unwrap());
     }
 
     /// Tests that the release branch should be pushed to the remote when the tree contents have changed.
-    #[test]
-    fn test_should_push_to_remote_when_tree_changed() {
-        todo!();
+    #[rstest]
+    fn test_should_push_to_remote_when_tree_changed(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+    ) {
+        // Create a Git repository and add an `origin` remote so that release branches can be pushed to it.
+        let (project_dir, repo) = project_repo;
+        let (_remote_dir, _remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+
+        // Commit the current files to the `main` branch.
+        repo.set_head("refs/heads/main").unwrap();
+        let head = commit(&repo, &["."], "chore: initial commit").unwrap();
+
+        // Create and push a release branch to the remote.
+        create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
+        commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+        push_branch(&repo, "reflow--branches--main", false).unwrap();
+
+        // Commit changed tree contents without changing the release message.
+        project_dir.child("release.txt").write_str("release v0.3.0").unwrap();
+        commit(&repo, &["release.txt"], "chore: release v0.3.0").unwrap();
+
+        // Verify that the release branch should be pushed when the tree contents have changed.
+        assert!(should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0").unwrap());
     }
 
     /// Tests that the release branch should not be pushed to the remote when it is already up-to-date.
-    #[test]
-    fn test_should_push_to_remote_not_when_up_to_date() {
-        todo!();
+    #[rstest]
+    fn test_should_push_to_remote_not_when_up_to_date(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+    ) {
+        // Create a Git repository and add an `origin` remote so that release branches can be pushed to it.
+        let (_project_dir, repo) = project_repo;
+        let (_remote_dir, _remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+
+        // Commit the current files to the `main` branch.
+        repo.set_head("refs/heads/main").unwrap();
+        let head = commit(&repo, &["."], "chore: initial commit").unwrap();
+
+        // Create and push a release branch to the remote.
+        create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
+        let remote_commit = commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+        push_branch(&repo, "reflow--branches--main", false).unwrap();
+
+        // Create a different commit with the same release message and tree contents.
+        let local_commit = commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+        assert_ne!(local_commit, remote_commit);
+
+        // Verify that the release branch should not be pushed when its message and tree are unchanged.
+        assert!(!should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0").unwrap());
     }
 
     /// Tests that the release branch name is built correctly for a combined release.
@@ -825,11 +899,11 @@ mod tests {
             next_version: semver::Version::parse("0.2.0").unwrap(),
             commit_message: "chore(example-cli): release v0.2.0".to_string(),
             changelog_md: indoc! {r#"
-                    ## [0.2.0] - 2026-09-26
+                ## [0.2.0] - 2026-09-26
 
-                    ### 🚀 Features
+                ### 🚀 Features
 
-                    - *(cli)* Print the subtraction of two numbers"#}
+                - *(cli)* Print the subtraction of two numbers"#}
             .to_string(),
             context: json!({}),
         }];
