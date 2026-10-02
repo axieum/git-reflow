@@ -160,14 +160,12 @@ pub fn write_changelog_markdown(path: &Path, changelog_md: &str) -> anyhow::Resu
     drop(writer);
 
     // Move the new changelog file to the target path.
-    if !path.exists() {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create changelog directory `{}`", parent.display()))?;
-        }
-        fs::File::create(path).with_context(|| format!("failed to create changelog file `{}`", path.display()))?;
+    if !path.exists()
+        && let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create changelog directory `{}`", parent.display()))?;
     }
     fs::rename(&temp_file, path)
         .with_context(|| format!("failed to rename new changelog file to `{}`", path.display()))?;
