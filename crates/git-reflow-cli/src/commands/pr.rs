@@ -55,7 +55,7 @@ impl PullRequestCommand {
         let prs = if plan.is_empty() {
             vec![]
         } else {
-            apply_release_plan(config, &plan, self.dry_run, None).await?
+            apply_release_plan(config, &plan, self.dry_run).await?
         };
 
         // Serialise the package release outcome/s to JSON and print it.

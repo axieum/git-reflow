@@ -11,9 +11,9 @@ pub struct PlanCommand {
     /// The target branch name for the release [default: current branch].
     #[arg(short, long, value_name = "BRANCH")]
     pub target_branch: Option<String>,
-    /// Hide the `git-cliff` context in the output.
-    #[arg(short = 'C', long, default_value_t = false)]
-    pub hide_context: bool,
+    /// Show the `git-cliff` context in the output.
+    #[arg(short = 'c', long, default_value_t = false)]
+    pub show_context: bool,
 }
 
 impl PlanCommand {
@@ -36,9 +36,9 @@ impl PlanCommand {
         // Plan the package release/s.
         let mut plan = plan_releases(config, &self.packages, &target_branch).await?;
 
-        // If the user wants to hide the `git-cliff` context, replace it with null.
+        // If the user did not request the `git-cliff` context, replace it with null.
         // NB: The `git-cliff` context can be very large, so this can help reduce the output size when not needed.
-        if self.hide_context {
+        if !self.show_context {
             for release in &mut plan {
                 release.context = serde_json::Value::Null;
             }

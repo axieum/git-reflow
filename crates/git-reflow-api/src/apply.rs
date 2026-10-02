@@ -2,7 +2,7 @@ use crate::git::{
     BranchGuard, commit, create_or_reset_branch, ensure_clean_working_directory, fetch_branch, get_origin_remote,
     push_branch, sanitize_branch_name, trees_match,
 };
-use crate::git_cliff::{CommandRunner, apply_git_cliff_context};
+use crate::git_cliff::write_changelog_markdown;
 use crate::plan::PackageRelease;
 use crate::provider::{BaseGitProvider, PullRequest, PullRequestPackage};
 use crate::settings::AppConfig;
@@ -18,7 +18,6 @@ use tracing::{debug, trace, warn};
 /// * `config` - The app configuration.
 /// * `plan` - The release plan to apply.
 /// * `dry_run` - If true, do not actually write the changes or commit them.
-/// * `cliff_runner` - An optional command runner for executing `git-cliff` commands.
 ///
 /// # Returns
 ///
@@ -27,7 +26,6 @@ pub async fn apply_release_plan(
     config: &AppConfig,
     plan: &[PackageRelease],
     dry_run: bool,
-    cliff_runner: Option<&dyn CommandRunner>,
 ) -> anyhow::Result<Vec<PullRequest>> {
     // Short-circuit if there are no releases to apply.
     if plan.is_empty() {
@@ -94,7 +92,7 @@ pub async fn apply_release_plan(
             }
 
             // Write the changes to the package files, and ensure changes were actually made.
-            let files = write_package_release(config, release, dry_run, cliff_runner).await?;
+            let files = write_package_release(config, release, dry_run).await?;
             ensure!(
                 !files.is_empty(),
                 "no changes were made for package `{}`",
@@ -203,7 +201,6 @@ pub async fn apply_release_plan(
 /// * `config` - The app configuration.
 /// * `release` - The package release information.
 /// * `dry_run` - If true, do not actually write the changes or commit them.
-/// * `cliff_runner` - An optional command runner for executing `git-cliff` commands.
 ///
 /// # Returns
 ///
@@ -212,7 +209,6 @@ pub async fn write_package_release(
     config: &AppConfig,
     release: &PackageRelease,
     dry_run: bool,
-    cliff_runner: Option<&dyn CommandRunner>,
 ) -> anyhow::Result<Vec<PathBuf>> {
     // Look up the package configuration.
     let package = config
@@ -229,12 +225,10 @@ pub async fn write_package_release(
     changed_files.extend(manifest_paths);
 
     // Write the changelog Markdown to the changelog file, if it is configured.
-    // NB: We use `git-cliff` to write the changelog, so that it can be formatted and templated consistently.
-    //     This means the `context` from the release plan is actually required, suggesting `plan --show-context`.
     if let Some(changelog_path) = package.changelog_path() {
         if !dry_run {
             debug!("write changelog to `{}`", changelog_path.display());
-            apply_git_cliff_context(&changelog_path, &release.context, cliff_runner)?;
+            write_changelog_markdown(&changelog_path, &release.changelog_md)?;
         } else {
             debug!("write changelog to `{}` (dry run)", changelog_path.display());
         }
@@ -332,7 +326,6 @@ pub fn build_changelog_summary(plan: &[PackageRelease]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git_cliff::tests::MockGitCliffRunner;
     use crate::provider::{GitProvider, github::GitHubProvider, github::tests::mock_octocrab};
     use assert_fs::{TempDir, prelude::*};
     use git_reflow_fixtures::{add_origin_remote, project_repo};
@@ -342,11 +335,6 @@ mod tests {
     use rstest::rstest;
     use semver::Version;
     use serde_json::json;
-    #[cfg(unix)]
-    use std::os::unix::process::ExitStatusExt;
-    #[cfg(windows)]
-    use std::os::windows::process::ExitStatusExt;
-    use std::process::Output;
 
     /// Tests that a grouped release creates one pull request containing all package releases.
     #[rstest]
@@ -381,16 +369,6 @@ mod tests {
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
         commit(&repo, &["."], "chore: initial commit").unwrap();
-
-        // Set up a mock `git-cliff` runner to simulate writing the changelog files.
-        let mut cliff_runner = MockGitCliffRunner::new();
-        cliff_runner.expect_run().returning(move |_, _| {
-            Ok(Output {
-                status: std::process::ExitStatus::from_raw(0), // success.
-                stdout: vec![],
-                stderr: vec![],
-            })
-        });
 
         // Prepare a release plan.
         let plan = vec![
@@ -442,9 +420,7 @@ mod tests {
         let head = repo.head().unwrap().target().unwrap();
 
         // Call `apply_release_plan` with the release plan.
-        let prs = apply_release_plan(&config, &plan, false, Some(&cliff_runner))
-            .await
-            .unwrap();
+        let prs = apply_release_plan(&config, &plan, false).await.unwrap();
 
         // Verify the Git repository state was restored, and that the release branch was pushed up.
         assert_eq!(repo.head().unwrap().target().unwrap(), head);
@@ -552,16 +528,6 @@ mod tests {
         repo.set_head("refs/heads/main").unwrap();
         commit(&repo, &["."], "chore: initial commit").unwrap();
 
-        // Set up a mock `git-cliff` runner to simulate writing the changelog files.
-        let mut cliff_runner = MockGitCliffRunner::new();
-        cliff_runner.expect_run().returning(move |_, _| {
-            Ok(Output {
-                status: std::process::ExitStatus::from_raw(0), // success.
-                stdout: vec![],
-                stderr: vec![],
-            })
-        });
-
         // Prepare a release plan.
         let plan = vec![
             PackageRelease {
@@ -612,9 +578,7 @@ mod tests {
         let head = repo.head().unwrap().target().unwrap();
 
         // Call `apply_release_plan` with the release plan.
-        let prs = apply_release_plan(&config, &plan, false, Some(&cliff_runner))
-            .await
-            .unwrap();
+        let prs = apply_release_plan(&config, &plan, false).await.unwrap();
 
         // Verify the Git repository state was restored, and that the release branches were pushed up.
         assert_eq!(repo.head().unwrap().target().unwrap(), head);
@@ -718,16 +682,6 @@ mod tests {
         repo.set_head("refs/heads/main").unwrap();
         commit(&repo, &["."], "chore: initial commit").unwrap();
 
-        // Set up a mock `git-cliff` runner to simulate writing the changelog files.
-        let mut cliff_runner = MockGitCliffRunner::new();
-        cliff_runner.expect_run().returning(move |_, _| {
-            Ok(Output {
-                status: std::process::ExitStatus::from_raw(0), // success.
-                stdout: vec![],
-                stderr: vec![],
-            })
-        });
-
         // Prepare a release plan.
         let plan = vec![PackageRelease {
             package_name: "example-rust-workspace".to_string(),
@@ -749,17 +703,13 @@ mod tests {
 
         // Create and push a release branch with the same release message and file contents.
         create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
-        let changed_files = write_package_release(&config, &plan[0], false, Some(&cliff_runner))
-            .await
-            .unwrap();
+        let changed_files = write_package_release(&config, &plan[0], false).await.unwrap();
         let remote_commit_id = commit(&repo, &changed_files, &plan[0].commit_message).unwrap();
         push_branch(&repo, "reflow--branches--main", false).unwrap();
         create_or_reset_branch(&repo, "main", head).unwrap(); // NB: Switch back to the `main` branch.
 
         // Call `apply_release_plan` with the release plan.
-        let prs = apply_release_plan(&config, &plan, false, Some(&cliff_runner))
-            .await
-            .unwrap();
+        let prs = apply_release_plan(&config, &plan, false).await.unwrap();
 
         // Verify the Git repository state was restored, and that the remote release branch was not changed.
         assert_eq!(repo.head().unwrap().target().unwrap(), head);
@@ -793,9 +743,7 @@ mod tests {
     /// Tests that an empty release plan does not create any pull requests.
     #[tokio::test]
     async fn test_apply_release_plan_with_empty_plan() {
-        let prs = apply_release_plan(&AppConfig::default(), &[], false, None)
-            .await
-            .unwrap();
+        let prs = apply_release_plan(&AppConfig::default(), &[], false).await.unwrap();
         assert!(prs.is_empty());
     }
 

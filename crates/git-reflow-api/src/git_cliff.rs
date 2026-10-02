@@ -2,10 +2,9 @@ use anyhow::{Context, anyhow, bail};
 use semver::Version;
 use serde_json::Value;
 use std::fs;
-use std::io::Write;
+use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
-use std::process::Command;
-use std::process::{Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::str;
 use std::str::FromStr;
 use tracing::{debug, trace};
@@ -92,49 +91,6 @@ pub fn run_git_cliff(dir: &Path, runner: Option<&dyn CommandRunner>) -> anyhow::
     }
 }
 
-/// Spawns a [`git-cliff`](https://github.com/orhun/git-cliff) process in a given directory and
-/// applies the given context.
-///
-/// > `git-cliff --from-context - --prepend ${path} --latest << ${context}`
-///
-/// # Arguments
-///
-/// * `path` - The path to write the changelog to.
-/// * `context` - The `git-cliff` context data.
-/// * `runner` - The `git-cliff` command runner.
-///
-/// # Returns
-///
-/// A result indicating whether the `git-cliff` context was successfully applied.
-pub fn apply_git_cliff_context(path: &Path, context: &Value, runner: Option<&dyn CommandRunner>) -> anyhow::Result<()> {
-    // Ensure the changelog file exists, creating it if necessary.
-    if !path.exists() {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create changelog directory `{}`", parent.display()))?;
-        }
-        fs::File::create(path).with_context(|| format!("failed to create changelog file `{}`", path.display()))?;
-    }
-
-    // Prepare `git-cliff` arguments.
-    let context_json = serde_json::to_string(&[context]).context("failed to serialize context")?;
-    let args = ["--from-context", "-", "--prepend", &path.to_string_lossy(), "--latest"];
-
-    // Invoke the `git-cliff` command.
-    trace!("$ git-cliff --from-context - --prepend {} --latest", path.display());
-    let runner = runner.unwrap_or(&GitCliffRunner);
-    let output = runner.run(&args, Some(&context_json))?;
-
-    // Check the `git-cliff` output.
-    if output.status.success() {
-        Ok(())
-    } else {
-        bail!("git-cliff error: {}", str::from_utf8(&output.stderr)?)
-    }
-}
-
 /// Spawns a [`git-cliff`](https://github.com/orhun/git-cliff) process and renders the Markdown
 /// changelog for the given context to a string.
 ///
@@ -164,6 +120,59 @@ pub fn render_changelog_markdown(context: &Value, runner: Option<&dyn CommandRun
     } else {
         bail!("git-cliff error: {}", str::from_utf8(&output.stderr)?)
     }
+}
+
+/// Prepends the given changelog Markdown to a changelog file.
+///
+/// # Arguments
+///
+/// * `path` - The path to the changelog file.
+/// * `changelog_md` - The changelog Markdown content to prepend.
+///
+/// # Returns
+///
+/// A result of whether the changelog was successfully written to.
+pub fn write_changelog_markdown(path: &Path, changelog_md: &str) -> anyhow::Result<()> {
+    // Create a temporary `CHANGELOG.md` file to stream the new changelog content.
+    let temp_file = tempfile::NamedTempFile::new().context("failed to create temp changelog file")?;
+    let mut writer = BufWriter::new(&temp_file);
+
+    // Write the new changelog content to the file.
+    writer
+        .write_all(changelog_md.as_bytes())
+        .context("failed to write new changelog content")?;
+    writer
+        .write(b"\n")
+        .context("failed to write new line after new changelog content")?;
+
+    // Write the existing changelog content to the file, if it exists.
+    if path.exists() {
+        let existing_file = fs::File::open(path)
+            .with_context(|| format!("failed to open existing changelog file `{}`", path.display()))?;
+        let mut reader = BufReader::new(existing_file);
+        writer
+            .write(b"\n")
+            .context("failed to write new line before existing changelog content")?;
+        std::io::copy(&mut reader, &mut writer).context("failed to write existing changelog content")?;
+    }
+
+    writer.flush().context("failed to flush changelog content")?;
+    drop(writer);
+
+    // Move the new changelog file to the target path.
+    if !path.exists() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create changelog directory `{}`", parent.display()))?;
+        }
+        fs::File::create(path).with_context(|| format!("failed to create changelog file `{}`", path.display()))?;
+    }
+    fs::rename(&temp_file, path)
+        .with_context(|| format!("failed to rename new changelog file to `{}`", path.display()))?;
+
+    Ok(())
 }
 
 /// Returns the parsed [Semantic Version](https://semver.org/) from the `git-cliff` context.
@@ -200,7 +209,8 @@ pub fn get_version_from_git_cliff_context(context: &Value) -> anyhow::Result<(Op
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use assert_fs::{TempDir, prelude::*};
+    use assert_fs::prelude::*;
+    use indoc::indoc;
     use mockall::mock;
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
@@ -218,7 +228,7 @@ pub(crate) mod tests {
 
     /// Tests that the JSON context from running `git-cliff` is parsed and returned.
     #[test]
-    fn run_git_cliff_with_success() {
+    fn test_run_git_cliff_with_success() {
         let include_dir = Path::new("crates").join("pkg-a");
         let include_glob = include_dir.join("**").join("*");
 
@@ -250,7 +260,7 @@ pub(crate) mod tests {
 
     /// Tests that an empty JSON context from running `git-cliff` is handled gracefully.
     #[test]
-    fn run_git_cliff_with_empty_context() {
+    fn test_run_git_cliff_with_empty_context() {
         let include_dir = Path::new("crates").join("pkg-a");
         let include_glob = include_dir.join("**").join("*");
 
@@ -282,7 +292,7 @@ pub(crate) mod tests {
 
     /// Tests that a non-zero exit code from `git-cliff` is handled gracefully.
     #[test]
-    fn run_git_cliff_with_erroneous_exit_code() {
+    fn test_run_git_cliff_with_erroneous_exit_code() {
         let include_dir = Path::new("crates").join("pkg-b");
         let include_glob = include_dir.join("**").join("*");
 
@@ -314,7 +324,7 @@ pub(crate) mod tests {
 
     /// Tests that unknown `git-cliff` JSON context output is handled gracefully.
     #[test]
-    fn run_git_cliff_with_unknown_json_output() {
+    fn test_run_git_cliff_with_unknown_json_output() {
         let include_dir = Path::new("crates").join("pkg-c");
         let include_glob = include_dir.join("**").join("*");
 
@@ -346,7 +356,7 @@ pub(crate) mod tests {
 
     /// Tests that malformed `git-cliff` JSON context output is handled gracefully.
     #[test]
-    fn run_git_cliff_with_malformed_json_output() {
+    fn test_run_git_cliff_with_malformed_json_output() {
         let include_dir = Path::new("crates").join("pkg-c");
         let include_glob = include_dir.join("**").join("*");
 
@@ -381,7 +391,7 @@ pub(crate) mod tests {
 
     /// Tests that running `git-cliff` with current dir (i.e. `.`) trims leading `./` edge-case.
     #[test]
-    fn run_git_cliff_with_current_dir() {
+    fn test_run_git_cliff_with_current_dir() {
         let include_dir = Path::new(".");
         let include_glob = Path::new("**").join("*"); // no leading `./`
 
@@ -411,84 +421,45 @@ pub(crate) mod tests {
         assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.0.0"}));
     }
 
-    /// Tests that the JSON context is applied by `git-cliff --from-context -`.
+    /// Tests that the changelog Markdown is rendered from a given `git-cliff` context.
     #[test]
-    fn apply_git_cliff_context_with_success() {
-        let temp_dir = TempDir::new().unwrap();
-        let changelog_path = temp_dir.child("CHANGELOG.md");
-        changelog_path.write_str("# Changelog").unwrap();
-        let changelog_path_str = changelog_path.to_string_lossy().to_string();
+    fn test_render_changelog_markdown_with_success() {
         let context = serde_json::json!({"version": "1.0.0"});
+        let expected_markdown = indoc! {r#"
+            ## [0.3.0] - 2026-09-26
+
+            ### 🚀 Features
+
+            - *(api)* Add a `subtract` function
+            - *(cli)* Print subtractions"#};
 
         let mut runner = MockGitCliffRunner::new();
         runner
             .expect_run()
-            .withf(move |args, input| {
-                args == ["--from-context", "-", "--prepend", &changelog_path_str, "--latest"]
-                    && input.as_deref() == Some(r#"[{"version":"1.0.0"}]"#)
-            })
+            .withf(move |args, _| args == ["--from-context", "-", "--output", "-"])
             .returning(move |_, _| {
                 Ok(Output {
                     status: std::process::ExitStatus::from_raw(0), // success
-                    stdout: vec![],
+                    stdout: expected_markdown.as_bytes().to_vec(),
                     stderr: vec![],
                 })
             });
 
-        let result = apply_git_cliff_context(&changelog_path, &context, Some(&runner));
+        let result = render_changelog_markdown(&context, Some(&runner));
 
         assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_markdown);
     }
 
-    /// Tests that the changelog file is created if it does not exist yet when applying the `git-cliff` context.
+    /// Tests that a non-zero exit code from `git-cliff` is handled gracefully when rendering Markdown.
     #[test]
-    fn apply_git_cliff_context_creates_changelog_file_when_missing() {
-        // Create a temporary directory where the `CHANGELOG.md` file will be created.
-        let temp_dir = TempDir::new().unwrap();
-        let changelog_path = temp_dir.child("crates").child("api").child("CHANGELOG.md");
-        let changelog_path_str = changelog_path.to_string_lossy().to_string();
-
-        // Mock the `git-cliff` runner.
-        let mut runner = MockGitCliffRunner::new();
-        runner
-            .expect_run()
-            .withf(move |args, input| {
-                args == ["--from-context", "-", "--prepend", &changelog_path_str, "--latest"]
-                    && input.as_deref() == Some(r#"[{"version":"1.0.0"}]"#)
-            })
-            .returning(move |_, _| {
-                Ok(Output {
-                    status: std::process::ExitStatus::from_raw(0), // success
-                    stdout: vec![],
-                    stderr: vec![],
-                })
-            });
-
-        // Apply the `git-cliff` context, which should create the `CHANGELOG.md` file.
-        let context = serde_json::json!({"version": "1.0.0"});
-        let result = apply_git_cliff_context(&changelog_path, &context, Some(&runner));
-
-        // Verify that the `CHANGELOG.md` file was created and the result is successful.
-        assert!(result.is_ok());
-        assert!(changelog_path.exists());
-    }
-
-    /// Tests that a non-zero exit code from `git-cliff --from-context -` is handled gracefully.
-    #[test]
-    fn apply_git_cliff_context_with_erroneous_exit_code() {
-        let temp_dir = TempDir::new().unwrap();
-        let changelog_path = temp_dir.child("CHANGELOG.md");
-        changelog_path.write_str("# Changelog").unwrap();
-        let changelog_path_str = changelog_path.to_string_lossy().to_string();
+    fn test_render_changelog_markdown_with_erroneous_exit_code() {
         let context = serde_json::json!({"version": "1.0.0"});
 
         let mut runner = MockGitCliffRunner::new();
         runner
             .expect_run()
-            .withf(move |args, input| {
-                args == ["--from-context", "-", "--prepend", &changelog_path_str, "--latest"]
-                    && input.as_deref() == Some(r#"[{"version":"1.0.0"}]"#)
-            })
+            .withf(move |args, _| args == ["--from-context", "-", "--output", "-"])
             .returning(move |_, _| {
                 Ok(Output {
                     status: std::process::ExitStatus::from_raw(1), // failure
@@ -497,15 +468,86 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = apply_git_cliff_context(&changelog_path, &context, Some(&runner));
+        let result = render_changelog_markdown(&context, Some(&runner));
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "git-cliff error: something went wrong");
     }
 
+    /// Tests that new changelog content is prepended to an existing `CHANGELOG.md` file.
+    #[test]
+    fn test_write_changelog_markdown() {
+        // Write an existing `CHANGELOG.md` file.
+        let temp_file = assert_fs::NamedTempFile::new("CHANGELOG.md").unwrap();
+        temp_file
+            .write_str(&indoc! {r#"
+                ## [0.3.0] - 2026-09-26
+
+                ### 🚀 Features
+
+                - *(api)* Add a `subtract` function
+                - *(cli)* Print subtractions"#})
+            .unwrap();
+
+        // Prepend new changelog content to the existing `CHANGELOG.md` file.
+        write_changelog_markdown(
+            temp_file.path(),
+            &indoc! {r#"
+                ## [0.4.0] - 2026-09-27
+
+                ### 🐛 Bug Fixes
+
+                - *(api)* Handle negative numbers correctly"#},
+        )
+        .unwrap();
+
+        // Verify that the `CHANGELOG.md` file contains the new content followed by the existing content.
+        temp_file.assert(indoc! {r#"
+            ## [0.4.0] - 2026-09-27
+
+            ### 🐛 Bug Fixes
+
+            - *(api)* Handle negative numbers correctly
+
+            ## [0.3.0] - 2026-09-26
+
+            ### 🚀 Features
+
+            - *(api)* Add a `subtract` function
+            - *(cli)* Print subtractions"#});
+    }
+
+    /// Tests that a new `CHANGELOG.md` file is created if it does not exist yet.
+    #[test]
+    fn test_write_changelog_markdown_with_new_file() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let changelog_path = temp_dir.child("CHANGELOG.md");
+
+        // Prepend new changelog content to the existing `CHANGELOG.md` file.
+        write_changelog_markdown(
+            changelog_path.path(),
+            &indoc! {r#"
+                ## [0.4.0] - 2026-09-27
+
+                ### 🐛 Bug Fixes
+
+                - *(api)* Handle negative numbers correctly"#},
+        )
+        .unwrap();
+
+        // Verify that the `CHANGELOG.md` file contains the new content followed by the existing content.
+        changelog_path.assert(indoc! {r#"
+                ## [0.4.0] - 2026-09-27
+
+                ### 🐛 Bug Fixes
+
+                - *(api)* Handle negative numbers correctly
+                "#});
+    }
+
     /// Tests that both the current and next versions are returned from the `git-cliff` JSON context.
     #[test]
-    fn get_version_from_git_cliff_context_with_valid_previous_version() {
+    fn test_get_version_from_git_cliff_context_with_valid_previous_version() {
         let context = serde_json::json!({"version": "1.1.0", "previous": {"version": "v1.0.1"}});
         let result = get_version_from_git_cliff_context(&context);
 
@@ -514,7 +556,7 @@ pub(crate) mod tests {
 
     /// Tests that a valid next version (with no previous version) is returned from the `git-cliff` JSON context.
     #[test]
-    fn get_version_from_git_cliff_context_with_valid_version() {
+    fn test_get_version_from_git_cliff_context_with_valid_version() {
         let context = serde_json::json!({"version": "1.0.1"});
         let result = get_version_from_git_cliff_context(&context);
 
@@ -523,7 +565,7 @@ pub(crate) mod tests {
 
     /// Tests that a valid prefixed next version is returned from the `git-cliff` JSON context.
     #[test]
-    fn get_version_from_git_cliff_context_with_valid_v_prefixed_version() {
+    fn test_get_version_from_git_cliff_context_with_valid_v_prefixed_version() {
         let context = serde_json::json!({"version": "v1.1.0"});
         let result = get_version_from_git_cliff_context(&context);
 
@@ -532,7 +574,7 @@ pub(crate) mod tests {
 
     /// Tests that an invalid next version is handled gracefully.
     #[test]
-    fn get_version_from_git_cliff_context_with_invalid_version() {
+    fn test_get_version_from_git_cliff_context_with_invalid_version() {
         let context = serde_json::json!({"version": "invalid version"});
         let result = get_version_from_git_cliff_context(&context);
 
@@ -545,7 +587,7 @@ pub(crate) mod tests {
 
     /// Tests that an invalid previous version is handled gracefully.
     #[test]
-    fn get_version_from_git_cliff_context_with_invalid_previous_version() {
+    fn test_get_version_from_git_cliff_context_with_invalid_previous_version() {
         let context = serde_json::json!({"version": "1.1.0", "previous": {"version": "invalid version"}});
         let result = get_version_from_git_cliff_context(&context);
 
@@ -558,7 +600,7 @@ pub(crate) mod tests {
 
     /// Tests that a missing version is handled gracefully.
     #[test]
-    fn get_version_from_git_cliff_context_with_missing_version() {
+    fn test_get_version_from_git_cliff_context_with_missing_version() {
         let context = serde_json::json!({"dummy": "text"});
         let result = get_version_from_git_cliff_context(&context);
 
