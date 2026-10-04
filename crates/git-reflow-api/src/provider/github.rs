@@ -2,6 +2,7 @@ use crate::provider::{BaseGitProvider, PullRequest};
 use anyhow::Context;
 use async_trait::async_trait;
 use octocrab::Octocrab;
+use octocrab::commits::PullRequestTarget;
 use octocrab::params::State;
 use std::borrow::Cow;
 use std::env;
@@ -72,6 +73,44 @@ impl GitHubProvider {
 
 #[async_trait]
 impl BaseGitProvider for GitHubProvider {
+    async fn associated_pull_requests(
+        &self,
+        owner: &str,
+        repo: &str,
+        commit: &str,
+    ) -> anyhow::Result<Vec<PullRequest>> {
+        let client = self.client()?;
+        let commits = client.commits(owner, repo);
+
+        // Find all pull requests associated with the given commit SHA.
+        trace!("find pull requests associated with commit `{commit}`");
+        let prs = commits
+            .associated_pull_requests(PullRequestTarget::Sha(commit.to_string()))
+            .send()
+            .await
+            .with_context(|| format!("could not list associated pull requests for commit `{commit}`"))?
+            .items
+            .iter()
+            .map(|pr| PullRequest {
+                number: pr.number,
+                url: pr
+                    .html_url
+                    .as_ref()
+                    .map(|url| url.to_string())
+                    .unwrap_or_else(|| format!("https://{}/{}/{}/pull/{}", self.host, owner, repo, pr.number)),
+                title: pr.title.clone().unwrap_or_default(),
+                body: pr.body.clone(),
+                head: pr.head.ref_field.clone(),
+                base: pr.base.ref_field.clone(),
+                existing: true,
+                packages: vec![],
+            })
+            .collect::<Vec<PullRequest>>();
+
+        trace!("found {} associated pull requests for commit `{commit}`", prs.len());
+        Ok(prs)
+    }
+
     async fn upsert_pull_request(
         &self,
         owner: &str,
@@ -210,6 +249,64 @@ pub(crate) mod tests {
         provider
             .client()
             .expect_err("the octocrab client was unexpectedly built");
+    }
+
+    /// Tests that associated pull requests are returned for a given commit SHA.
+    #[rstest]
+    #[tokio::test]
+    async fn test_associated_pull_requests(provider: GitHubProvider) {
+        // Set up a mock server to simulate the GitHub API.
+        let server = mock_octocrab(&provider).await;
+        let commit_pulls_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/repos/octocat/Hello-World/commits/6dcb09b5b57875f334f61aebed695e2e4193db5e/pulls");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!("../../tests/fixtures/github_commit_pulls.json"));
+        });
+
+        // Find associated pull requests for a commit SHA.
+        let prs = provider
+            .associated_pull_requests("octocat", "Hello-World", "6dcb09b5b57875f334f61aebed695e2e4193db5e")
+            .await;
+
+        // Ensure the associated pull requests were retrieved successfully.
+        commit_pulls_mock.assert_async().await;
+        assert_eq!(
+            prs.unwrap(),
+            vec![PullRequest {
+                number: 1347,
+                url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                title: "Amazing new feature".to_string(),
+                body: Some("Please pull these awesome changes in!".to_string()),
+                head: "new-topic".to_string(),
+                base: "master".to_string(),
+                existing: true,
+                packages: vec![],
+            }],
+        );
+    }
+
+    /// Tests that no associated pull requests are returned for a given commit SHA when none exist.
+    #[rstest]
+    #[tokio::test]
+    async fn test_associated_pull_requests_when_none_exist(provider: GitHubProvider) {
+        // Set up a mock server to simulate the GitHub API.
+        let server = mock_octocrab(&provider).await;
+        let commit_pulls_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/repos/octocat/Hello-World/commits/6dcb09b5b57875f334f61aebed695e2e4193db5e/pulls");
+            then.status(200).header("content-type", "application/json").body("[]");
+        });
+
+        // Find associated pull requests for a commit SHA.
+        let prs = provider
+            .associated_pull_requests("octocat", "Hello-World", "6dcb09b5b57875f334f61aebed695e2e4193db5e")
+            .await;
+
+        // Ensure the associated pull requests were retrieved successfully.
+        commit_pulls_mock.assert_async().await;
+        assert!(prs.unwrap().is_empty());
     }
 
     /// Tests that a new pull request is created when one does not exist yet.

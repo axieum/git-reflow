@@ -72,6 +72,20 @@ pub struct PullRequestFrontmatter {
 
 #[async_trait]
 pub trait BaseGitProvider {
+    /// Finds pull requests associated with a given commit SHA on the Git provider.
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner of the repository (user or organization).
+    /// * `repo` - The name of the repository.
+    /// * `commit` - The commit SHA to search for associated pull requests.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of pull requests associated with the given commit SHA, if any.
+    async fn associated_pull_requests(&self, owner: &str, repo: &str, commit: &str)
+    -> anyhow::Result<Vec<PullRequest>>;
+
     /// Creates or updates a pull request on the Git provider.
     ///
     /// # Arguments
@@ -99,6 +113,17 @@ pub trait BaseGitProvider {
 
 #[async_trait]
 impl BaseGitProvider for GitProvider {
+    async fn associated_pull_requests(
+        &self,
+        owner: &str,
+        repo: &str,
+        commit: &str,
+    ) -> anyhow::Result<Vec<PullRequest>> {
+        match self {
+            GitProvider::GitHub(provider) => provider.associated_pull_requests(owner, repo, commit).await,
+        }
+    }
+
     async fn upsert_pull_request(
         &self,
         owner: &str,
