@@ -120,6 +120,8 @@ impl BaseGitProvider for GitHubProvider {
                     .as_ref()
                     .map(|url| url.to_string())
                     .unwrap_or_else(|| format!("https://{}/{}/{}/pull/{}", self.host, owner, repo, updated.number)),
+                title: updated.title.clone().unwrap_or_default(),
+                body: updated.body.clone(),
                 head: head.to_string(),
                 base: base.to_string(),
                 existing: true,
@@ -142,6 +144,8 @@ impl BaseGitProvider for GitHubProvider {
                 .html_url
                 .map(|url| url.to_string())
                 .unwrap_or_else(|| format!("https://{}/{}/{}/pull/{}", self.host, owner, repo, created.number)),
+            title: title.to_string(),
+            body: Some(body.to_string()),
             head: head.to_string(),
             base: base.to_string(),
             existing: false,
@@ -247,6 +251,8 @@ pub(crate) mod tests {
             pr.unwrap(),
             PullRequest {
                 number: 1347,
+                title: "chore: release v1.0.0".to_string(),
+                body: Some("...".to_string()),
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
@@ -298,6 +304,8 @@ pub(crate) mod tests {
             PullRequest {
                 number: 1347,
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                title: "Amazing new feature".to_string(),
+                body: Some("Please pull these awesome changes in!".to_string()),
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
                 existing: true,
@@ -343,6 +351,8 @@ pub(crate) mod tests {
             PullRequest {
                 number: 1347,
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                title: "Amazing new feature".to_string(),
+                body: Some("Please pull these awesome changes in!".to_string()),
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
                 existing: true,

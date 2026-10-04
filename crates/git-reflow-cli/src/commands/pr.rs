@@ -58,7 +58,7 @@ impl PullRequestCommand {
             apply_release_plan(config, &plan, self.dry_run).await?
         };
 
-        // Serialise the package release outcome/s to JSON and print it.
+        // Serialise the pull request/s to JSON and print it.
         let json = serde_json::to_string_pretty(&prs)?;
         println!("{json}");
         Ok(())

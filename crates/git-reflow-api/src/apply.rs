@@ -4,7 +4,7 @@ use crate::git::{
 };
 use crate::git_cliff::write_changelog_markdown;
 use crate::plan::PackageRelease;
-use crate::provider::{BaseGitProvider, PullRequest, PullRequestPackage};
+use crate::provider::{BaseGitProvider, PullRequest, PullRequestPackage, build_pull_request_body};
 use crate::settings::AppConfig;
 use crate::strategy::BaseStrategy;
 use anyhow::{Context, anyhow, ensure};
@@ -66,7 +66,7 @@ pub async fn apply_release_plan(
         // Prepare the branch name, pull request title & description for the release group.
         let branch_name = build_release_branch_name(config, &releases[0].package_name, &guard.original_branch)?;
         let pr_title = &releases[0].commit_message;
-        let pr_body = build_changelog_summary(releases);
+        let pr_body = build_pull_request_body(releases)?;
 
         // Create or reset the target branch for the release group.
         if !dry_run {
@@ -144,13 +144,7 @@ pub async fn apply_release_plan(
                     &pr_body,
                 )
                 .await?;
-            pr.packages = releases
-                .iter()
-                .map(|release| PullRequestPackage {
-                    name: release.package_name.clone(),
-                    version: release.next_version.clone(),
-                })
-                .collect();
+            pr.packages = releases.iter().map(PullRequestPackage::from).collect();
             debug!(
                 "🔀 {} pull request #{}: {}",
                 if pr.existing { "updated" } else { "created" },
@@ -163,16 +157,12 @@ pub async fn apply_release_plan(
             pull_requests.push(PullRequest {
                 number: 0,
                 url: String::new(),
+                title: pr_title.clone(),
+                body: Some(pr_body),
                 head: branch_name,
                 base: guard.original_branch.clone(),
                 existing: false,
-                packages: releases
-                    .iter()
-                    .map(|release| PullRequestPackage {
-                        name: release.package_name.clone(),
-                        version: release.next_version.clone(),
-                    })
-                    .collect(),
+                packages: releases.iter().map(PullRequestPackage::from).collect(),
             });
         }
     }
@@ -296,33 +286,6 @@ pub fn build_release_branch_name(config: &AppConfig, package_name: &str, base: &
     })
 }
 
-/// Renders a summary of all package release changelogs in a given release plan as Markdown.
-///
-/// # Arguments
-///
-/// * `plan` - The release plan to build a changelog summary for.
-///
-/// # Returns
-///
-/// The summary of all package release changelogs in the release plan as Markdown.
-pub fn build_changelog_summary(plan: &[PackageRelease]) -> String {
-    if plan.len() == 1 {
-        // Use the changelog Markdown for the single release as the pull request body.
-        plan[0].changelog_md.clone()
-    } else {
-        // Use a summary of all changelog Markdowns for the multiple releases as the pull request body.
-        plan.iter()
-            .map(|release| {
-                format!(
-                    "<details>\n<summary>{}: v{}</summary>\n\n{}\n\n</details>\n",
-                    release.package_name, release.next_version, release.changelog_md
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,7 +348,7 @@ mod tests {
                     - *(api)* Add a `subtract` function
                     - *(cli)* Print subtractions"#}
                 .to_string(),
-                context: json!({}), // NB: `git-cliff` is not actually invoked, so an empty context will suffice.
+                context: json!(null),
             },
             PackageRelease {
                 package_name: "example-api".to_string(),
@@ -399,7 +362,7 @@ mod tests {
 
                     - *(api)* Add a `subtract` function"#}
                 .to_string(),
-                context: json!({}),
+                context: json!(null),
             },
             PackageRelease {
                 package_name: "example-cli".to_string(),
@@ -413,14 +376,14 @@ mod tests {
 
                     - *(cli)* Print subtractions"#}
                 .to_string(),
-                context: json!({}),
+                context: json!(null),
             },
         ];
 
         let head = repo.head().unwrap().target().unwrap();
 
         // Call `apply_release_plan` with the release plan.
-        let prs = apply_release_plan(&config, &plan, false).await.unwrap();
+        let prs = apply_release_plan(&config, &plan, false).await;
 
         // Verify the Git repository state was restored, and that the release branch was pushed up.
         assert_eq!(repo.head().unwrap().target().unwrap(), head);
@@ -432,10 +395,12 @@ mod tests {
         list_mock.assert_async().await;
         create_mock.assert_calls_async(1).await;
         assert_eq!(
-            prs,
+            prs.unwrap(),
             vec![PullRequest {
                 number: 1347,
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                title: "chore: release v0.3.0".to_string(),
+                body: Some(build_pull_request_body(&plan).unwrap()),
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
                 existing: false,
@@ -443,14 +408,17 @@ mod tests {
                     PullRequestPackage {
                         name: "example-rust-workspace".to_string(),
                         version: Version::parse("0.3.0").unwrap(),
+                        changelog_md: Some(plan[0].changelog_md.clone()),
                     },
                     PullRequestPackage {
                         name: "example-api".to_string(),
                         version: Version::parse("0.2.0").unwrap(),
+                        changelog_md: Some(plan[1].changelog_md.clone()),
                     },
                     PullRequestPackage {
                         name: "example-cli".to_string(),
                         version: Version::parse("0.3.0").unwrap(),
+                        changelog_md: Some(plan[2].changelog_md.clone()),
                     },
                 ],
             }]
@@ -543,7 +511,7 @@ mod tests {
                     - *(api)* Add a `subtract` function
                     - *(cli)* Print subtractions"#}
                 .to_string(),
-                context: json!({}), // NB: `git-cliff` is not actually invoked, so an empty context will suffice.
+                context: json!(null),
             },
             PackageRelease {
                 package_name: "example-api".to_string(),
@@ -557,7 +525,7 @@ mod tests {
 
                     - *(api)* Add a `subtract` function"#}
                 .to_string(),
-                context: json!({}),
+                context: json!(null),
             },
             PackageRelease {
                 package_name: "example-cli".to_string(),
@@ -571,14 +539,14 @@ mod tests {
 
                     - *(cli)* Print subtractions"#}
                 .to_string(),
-                context: json!({}),
+                context: json!(null),
             },
         ];
 
         let head = repo.head().unwrap().target().unwrap();
 
         // Call `apply_release_plan` with the release plan.
-        let prs = apply_release_plan(&config, &plan, false).await.unwrap();
+        let prs = apply_release_plan(&config, &plan, false).await;
 
         // Verify the Git repository state was restored, and that the release branches were pushed up.
         assert_eq!(repo.head().unwrap().target().unwrap(), head);
@@ -597,39 +565,48 @@ mod tests {
             mock.assert_async().await;
         }
         assert_eq!(
-            prs,
+            prs.unwrap(),
             vec![
                 PullRequest {
                     number: 1347,
                     url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                    title: "chore: release v0.3.0".to_string(),
+                    body: Some(build_pull_request_body(&plan[0..1]).unwrap()),
                     head: "reflow--branches--main--example-rust-workspace".to_string(),
                     base: "main".to_string(),
                     existing: false,
                     packages: vec![PullRequestPackage {
                         name: "example-rust-workspace".to_string(),
                         version: Version::parse("0.3.0").unwrap(),
+                        changelog_md: Some(plan[0].changelog_md.clone()),
                     }],
                 },
                 PullRequest {
                     number: 1347, // NB: The mock server returns the same PR number for all three requests.
                     url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                    title: "chore(example-api): release v0.2.0".to_string(),
+                    body: Some(build_pull_request_body(&plan[1..2]).unwrap()),
                     head: "reflow--branches--main--example-api".to_string(),
                     base: "main".to_string(),
                     existing: false,
                     packages: vec![PullRequestPackage {
                         name: "example-api".to_string(),
                         version: Version::parse("0.2.0").unwrap(),
+                        changelog_md: Some(plan[1].changelog_md.clone()),
                     }],
                 },
                 PullRequest {
                     number: 1347, // NB: The mock server returns the same PR number for all three requests.
                     url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                    title: "chore(example-cli): release v0.3.0".to_string(),
+                    body: Some(build_pull_request_body(&plan[2..3]).unwrap()),
                     head: "reflow--branches--main--example-cli".to_string(),
                     base: "main".to_string(),
                     existing: false,
                     packages: vec![PullRequestPackage {
                         name: "example-cli".to_string(),
                         version: Version::parse("0.3.0").unwrap(),
+                        changelog_md: Some(plan[2].changelog_md.clone()),
                     }],
                 },
             ]
@@ -659,12 +636,19 @@ mod tests {
             body[0]["title"] = serde_json::Value::String("chore: release v0.3.0".to_string());
             body[0]["body"] = serde_json::Value::String(
                 indoc! {r#"
+                    ---
+                    packages:
+                    - name: example-rust-workspace
+                      version: 0.3.0
+                    ---
+
                     ## [0.3.0] - 2026-09-26
 
                     ### 🚀 Features
 
                     - *(api)* Add a `subtract` function
-                    - *(cli)* Print subtractions"#}
+                    - *(cli)* Print subtractions
+                    "#}
                 .to_string(),
             );
 
@@ -696,7 +680,7 @@ mod tests {
                 - *(api)* Add a `subtract` function
                 - *(cli)* Print subtractions"#}
             .to_string(),
-            context: json!({}), // NB: `git-cliff` is not actually invoked, so an empty context will suffice.
+            context: json!(null),
         }];
 
         let head = repo.head().unwrap().target().unwrap();
@@ -709,7 +693,7 @@ mod tests {
         create_or_reset_branch(&repo, "main", head).unwrap(); // NB: Switch back to the `main` branch.
 
         // Call `apply_release_plan` with the release plan.
-        let prs = apply_release_plan(&config, &plan, false).await.unwrap();
+        let prs = apply_release_plan(&config, &plan, false).await;
 
         // Verify the Git repository state was restored, and that the remote release branch was not changed.
         assert_eq!(repo.head().unwrap().target().unwrap(), head);
@@ -725,16 +709,19 @@ mod tests {
         // NB: We expect the exisitng pull request to be fetched, but no creation or patch requests to be made.
         list_mock.assert_async().await;
         assert_eq!(
-            prs,
+            prs.unwrap(),
             vec![PullRequest {
                 number: 1347,
                 url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
+                title: "chore: release v0.3.0".to_string(),
+                body: Some(build_pull_request_body(&plan).unwrap()),
                 head: "reflow--branches--main".to_string(),
                 base: "main".to_string(),
                 existing: true,
                 packages: vec![PullRequestPackage {
                     name: "example-rust-workspace".to_string(),
                     version: Version::parse("0.3.0").unwrap(),
+                    changelog_md: Some(plan[0].changelog_md.clone()),
                 }],
             }],
         );
@@ -860,96 +847,5 @@ mod tests {
         config.git.separate_pull_requests = true;
         let branch_name = build_release_branch_name(&config, "example-package", "main").unwrap();
         assert_eq!(branch_name, "reflow--branches--main--example-package");
-    }
-
-    /// Tests that a single changelog in a release plan is summarised correctly in Markdown format.
-    #[test]
-    fn test_build_changelog_summary_for_single_release() {
-        let plan = vec![PackageRelease {
-            package_name: "example-cli".to_string(),
-            current_version: Some(semver::Version::parse("0.1.0").unwrap()),
-            next_version: semver::Version::parse("0.2.0").unwrap(),
-            commit_message: "chore(example-cli): release v0.2.0".to_string(),
-            changelog_md: indoc! {r#"
-                ## [0.2.0] - 2026-09-26
-
-                ### 🚀 Features
-
-                - *(cli)* Print the subtraction of two numbers"#}
-            .to_string(),
-            context: json!({}),
-        }];
-
-        assert_eq!(
-            build_changelog_summary(&plan),
-            r#"## [0.2.0] - 2026-09-26
-
-### 🚀 Features
-
-- *(cli)* Print the subtraction of two numbers"#,
-        );
-    }
-
-    /// Tests that multiple changelogs in a release plan are summarised correctly in Markdown format.
-    #[test]
-    fn test_build_changelog_summary() {
-        let plan = vec![
-            PackageRelease {
-                package_name: "example-rust-workspace".to_string(),
-                current_version: Some(semver::Version::parse("0.2.0").unwrap()),
-                next_version: semver::Version::parse("0.3.0").unwrap(),
-                commit_message: "chore: release v0.3.0".to_string(),
-                changelog_md: indoc! {r#"
-                    ## [0.3.0] - 2026-09-26
-
-                    ### 🚀 Features
-
-                    - *(api)* Add a `subtract` function
-                    - *(cli)* Print subtractions"#}
-                .to_string(),
-                context: json!({}),
-            },
-            PackageRelease {
-                package_name: "example-api".to_string(),
-                current_version: Some(semver::Version::parse("0.1.0").unwrap()),
-                next_version: semver::Version::parse("0.2.0").unwrap(),
-                commit_message: "chore(example-api): release v0.2.0".to_string(),
-                changelog_md: indoc! {r#"
-                    ## [0.2.0] - 2026-09-26
-
-                    ### 🚀 Features
-
-                    - *(api)* Add a `subtract` function"#}
-                .to_string(),
-                context: json!({}),
-            },
-        ];
-
-        assert_eq!(
-            build_changelog_summary(&plan),
-            r#"<details>
-<summary>example-rust-workspace: v0.3.0</summary>
-
-## [0.3.0] - 2026-09-26
-
-### 🚀 Features
-
-- *(api)* Add a `subtract` function
-- *(cli)* Print subtractions
-
-</details>
-
-<details>
-<summary>example-api: v0.2.0</summary>
-
-## [0.2.0] - 2026-09-26
-
-### 🚀 Features
-
-- *(api)* Add a `subtract` function
-
-</details>
-"#,
-        );
     }
 }

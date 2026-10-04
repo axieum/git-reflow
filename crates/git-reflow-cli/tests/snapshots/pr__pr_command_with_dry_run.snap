@@ -6,17 +6,21 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
   {
     "number": 0,
     "url": "",
+    "title": "chore: release v1.1.0",
+    "body": "---\npackages:\n- name: example-rust-workspace\n  version: 1.1.0\n- name: example-api\n  version: 1.1.0\n---\n\n<details id=\"example-rust-workspace\">\n<summary>example-rust-workspace: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function</details>\n\n<details id=\"example-api\">\n<summary>example-api: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function</details>\n",
     "head": "reflow--branches--main",
     "base": "main",
     "existing": false,
     "packages": [
       {
         "name": "example-rust-workspace",
-        "version": "1.1.0"
+        "version": "1.1.0",
+        "changelog_md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function"
       },
       {
         "name": "example-api",
-        "version": "1.1.0"
+        "version": "1.1.0",
+        "changelog_md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function"
       }
     ]
   }
