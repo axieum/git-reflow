@@ -1,11 +1,12 @@
 use crate::plan::PackageRelease;
 use crate::provider::github::GitHubProvider;
-use anyhow::ensure;
+use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use semver::Version;
 use std::fmt;
 use std::fmt::Display;
 use std::str::FromStr;
+use tracing::trace;
 
 pub mod github;
 
@@ -221,10 +222,94 @@ pub fn build_pull_request_body(
     Ok(format!("---\n{}---\n\n{}", serde_yaml::to_string(&frontmatter)?, body))
 }
 
+/// Parses the package names, versions and their changelog Markdown from a pull request body.
+///
+/// It expects a Markdown frontmatter at the top of the body, e.g.
+///
+/// ```yaml
+/// ---
+/// packages:
+/// - name: example-rust-workspace
+///   version: 1.2.0
+/// - name: example-api
+///   version: 1.1.0-rc.6
+/// ---
+/// ```
+///
+/// For a single package, the rest of the body is treated as the changelog content.
+///
+/// For multiple packages, the changelog content for each package exists in a `<details>` HTML tag with the package
+/// name as the `id` attribute, e.g.
+///
+/// ```html
+/// <details id="example-rust-workspace">
+/// <summary>example-rust-workspace: v1.2.0</summary>
+///
+/// ...
+/// </details>
+/// ```
+///
+/// # Arguments
+///
+/// * `body` - The Markdown content of the pull request body, if any.
+///
+/// # Returns
+///
+/// A result containing a list of packages with their names, versions, and changelog Markdown.
+///
+/// # Errors
+///
+/// If the frontmatter is missing, malformed, or does not contain any packages, an error is returned.
+pub fn parse_pull_request_body(body: Option<&String>) -> anyhow::Result<Vec<PullRequestPackage>> {
+    match body {
+        Some(body) => {
+            // Parse the frontmatter to extract the package information.
+            trace!("parse pull request body: {body}");
+            let body = body.replace("\r\n", "\n");
+            let content = body
+                .strip_prefix("---\n")
+                .context("pull request body does not start with a frontmatter")?;
+            let (frontmatter, content) = content
+                .split_once("\n---\n\n")
+                .context("pull request body does not contain a valid frontmatter")?;
+
+            trace!("parse pull request frontmatter: {frontmatter}");
+            let mut frontmatter: PullRequestFrontmatter =
+                serde_yaml::from_str(frontmatter).context("invalid pull request body frontmatter")?;
+
+            // Ensure that the frontmatter contains at least one package.
+            ensure!(
+                !frontmatter.packages.is_empty(),
+                "pull request body frontmatter does not contain any packages"
+            );
+
+            // If the frontmatter contains only one package, then treat the rest of the body as the changelog.
+            if frontmatter.packages.len() == 1 {
+                let package = &mut frontmatter.packages[0];
+                package.changelog_md = Some(content.to_string());
+                return Ok(frontmatter.packages);
+            }
+
+            // For multiple packages, extract the changelog for each package from the `details` HTML tags in the body.
+            for package in &mut frontmatter.packages {
+                if let Some((_, details)) = content.split_once(&format!("<details id=\"{}\">", package.name))
+                    && let Some((details, _)) = details.split_once("</details>")
+                    && let Some((_, changelog_md)) = details.split_once("</summary>\n\n")
+                {
+                    package.changelog_md = Some(changelog_md.to_string());
+                }
+            }
+            Ok(frontmatter.packages)
+        }
+        None => bail!("pull request body is empty and does not contain any packages"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use indoc::indoc;
+    use rstest::rstest;
 
     /// Tests that a pull request body can be built from a list of a single package.
     #[test]
@@ -360,5 +445,212 @@ mod tests {
             build_pull_request_body(vec![&plan]).unwrap(),
             build_pull_request_body(vec![package]).unwrap(),
         );
+    }
+
+    /// Tests that a package and its changelog Markdown can be parsed from a pull request body.
+    #[rstest]
+    #[case("\n")]
+    #[case("\r\n")]
+    fn test_parse_pull_request_body(#[case] line_ending: &str) {
+        assert_eq!(
+            parse_pull_request_body(Some(
+                &indoc! {r#"
+                    ---
+                    packages:
+                    - name: 'example-rust-workspace'
+                      version: '1.1.0'
+                    ---
+
+                    ## [1.1.0] - [DATE]
+
+                    ### 🚀 Features
+
+                    - *(api)* Add a `subtract` function
+                    "#}
+                .replace('\n', line_ending)
+            ))
+            .unwrap(),
+            vec![PullRequestPackage {
+                name: "example-rust-workspace".to_string(),
+                version: Version::parse("1.1.0").unwrap(),
+                changelog_md: Some(
+                    indoc! {r#"
+                        ## [1.1.0] - [DATE]
+
+                        ### 🚀 Features
+
+                        - *(api)* Add a `subtract` function
+                        "#}
+                    .to_string()
+                ),
+            }],
+        );
+    }
+
+    /// Tests that multiple packages and their changelog Markdown can be parsed from a pull request body.
+    #[rstest]
+    #[case("\n")]
+    #[case("\r\n")]
+    fn test_parse_pull_request_body_with_multiple(#[case] line_ending: &str) {
+        assert_eq!(
+            parse_pull_request_body(Some(
+                &indoc! {r#"
+                    ---
+                    packages:
+                    - name: 'example-rust-workspace'
+                      version: '1.2.0'
+                    - name: 'example-api'
+                      version: '1.1.0-rc.6'
+                    ---
+
+                    <details id="example-rust-workspace">
+                    <summary>example-rust-workspace: v1.2.0</summary>
+
+                    ## [1.2.0] - [DATE]
+
+                    ### 🚀 Features
+
+                    - Add a project-wide feature
+                    - *(api)* Add a `subtract` function
+                    </details>
+
+                    <details id="example-api">
+                    <summary>example-api: v1.1.0-rc.6</summary>
+
+                    ## [1.1.0-rc.6] - [DATE]
+
+                    ### 🚀 Features
+
+                    - *(api)* Add a `subtract` function
+                    </details>
+                    "#}
+                .replace('\n', line_ending)
+            ))
+            .unwrap(),
+            vec![
+                PullRequestPackage {
+                    name: "example-rust-workspace".to_string(),
+                    version: Version::parse("1.2.0").unwrap(),
+                    changelog_md: Some(
+                        indoc! {r#"
+                            ## [1.2.0] - [DATE]
+
+                            ### 🚀 Features
+
+                            - Add a project-wide feature
+                            - *(api)* Add a `subtract` function
+                            "#}
+                        .to_string()
+                    ),
+                },
+                PullRequestPackage {
+                    name: "example-api".to_string(),
+                    version: Version::parse("1.1.0-rc.6").unwrap(),
+                    changelog_md: Some(
+                        indoc! {r#"
+                            ## [1.1.0-rc.6] - [DATE]
+
+                            ### 🚀 Features
+
+                            - *(api)* Add a `subtract` function
+                            "#}
+                        .to_string()
+                    ),
+                },
+            ],
+        );
+    }
+
+    /// Tests that an empty list of packages is returned when the pull request body is `None`.
+    #[test]
+    fn test_parse_pull_request_body_with_none() {
+        let result = parse_pull_request_body(None);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "pull request body is empty and does not contain any packages",
+        );
+    }
+
+    /// Tests that a missing frontmatter prevents packages from being parsed from a pull request body.
+    #[test]
+    fn test_parse_pull_request_body_with_missing_frontmatter() {
+        let result = parse_pull_request_body(Some(
+            &indoc! {r#"
+                ## [1.1.0] - [DATE]
+
+                ### 🚀 Features
+
+                - *(api)* Add a `subtract` function
+                "#}
+            .to_string(),
+        ));
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "pull request body does not start with a frontmatter"
+        );
+    }
+
+    /// Tests that a malformed frontmatter prevents packages from being parsed from a pull request body.
+    #[test]
+    fn test_parse_pull_request_body_with_malformed_frontmatter() {
+        let result = parse_pull_request_body(Some(
+            &indoc! {r#"
+                ---
+                packages:
+                - name: 'example-rust-workspace'
+                  version: '1.1.0'
+                - name: 'example-api'
+                ---
+
+                ...
+                "#}
+            .to_string(),
+        ));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "invalid pull request body frontmatter");
+    }
+
+    /// Tests that horizontal lines does not interfere with the frontmatter in a pull request body.
+    #[test]
+    fn test_parse_pull_request_body_with_horizontal_line() {
+        let result = parse_pull_request_body(Some(
+            &indoc! {r#"
+                ---
+                packages:
+                - name: 'example-rust-workspace'
+                  version: '1.1.0'
+                - name: 'example-api'
+                  version: '1.1.0'
+                ---
+
+                <details id="example-rust-workspace">
+                <summary>example-rust-workspace: v1.1.0</summary>
+
+                ## [1.1.0] - [DATE]
+
+                --- <!-- horizontal line should not interfere with frontmatter -->
+
+                ### 🚀 Features
+
+                - Add a project-wide feature
+                - *(api)* Add a `subtract` function
+                </details>
+
+                <details id="example-api">
+                <summary>example-api: v1.1.0</summary>
+
+                ## [1.1.0] - [DATE]
+
+                ### 🚀 Features
+
+                - *(api)* Add a `subtract` function
+                </details>
+                "#}
+            .to_string(),
+        ));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 2);
     }
 }
