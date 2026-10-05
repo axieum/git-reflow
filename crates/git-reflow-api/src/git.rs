@@ -267,7 +267,68 @@ where
     .context("could not commit changes")
 }
 
-/// Fetches the specified branch from the `origin` remote.
+/// Creates a tag at the given commit.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to create the tag in.
+/// * `name` - The name of the tag to create.
+/// * `commit_id` - The commit ID to create the tag at.
+/// * `force` - Whether to force the creation of the tag if it already exists.
+///
+/// # Returns
+///
+/// A result containing the Git object ID (OID) of the new tag.
+pub fn tag(repo: &Repository, name: &str, commit_id: git2::Oid, force: bool) -> anyhow::Result<git2::Oid> {
+    let commit = repo.find_commit(commit_id).context("failed to find commit")?;
+    let signature = repo.signature()?;
+    repo.tag(name, commit.as_object(), &signature, "", force)
+        .with_context(|| format!("could not create tag `{name}`"))
+}
+
+/// Fetches the specified reference from the named remote.
+///
+/// NB: This function spawns the `git` CLI as a child process to ensure that
+///     the fetch respects the user's Git configuration, e.g. authentication.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to fetch the branch into.
+/// * `remote_name` - The name of the remote to fetch from, e.g. `origin`.
+/// * `refspec` - The name of the reference to fetch, e.g. `refs/heads/feature` or `refs/tags/v1.0.0`.
+///
+/// # Returns
+///
+/// A result indicating whether the fetch was successful or not.
+pub fn fetch(repo: &Repository, remote_name: &str, refspec: &str) -> anyhow::Result<()> {
+    // Prepare `git` arguments.
+    let workdir = repo.workdir().unwrap_or(repo.path());
+
+    // Invoke the `git` command.
+    // NB: We use the `git` CLI here to ensure that the fetch respects the user's Git configuration, e.g. authentication.
+    trace!("$ git fetch {} {}", remote_name, refspec);
+    let child = Command::new("git")
+        .current_dir(workdir) // NB: Set both the current directory and `-C`; better safe than sorry.
+        .arg("-C")
+        .arg(workdir)
+        .args(["fetch", remote_name, refspec])
+        .arg("--porcelain")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn `git` process")?;
+    let output = child.wait_with_output().context("failed to wait for `git` process")?;
+
+    // Check the `git` output.
+    if output.status.success() {
+        trace!("↳ {}", str::from_utf8(&output.stdout)?);
+        Ok(())
+    } else {
+        bail!("git error ({}): {}", output.status, str::from_utf8(&output.stderr)?);
+    }
+}
+
+/// Fetches the specified branch from the named remote.
 ///
 /// NB: This function spawns the `git` CLI as a child process to ensure that
 ///     the fetch respects the user's Git configuration, e.g. authentication.
@@ -282,19 +343,41 @@ where
 ///
 /// A result containing the remote branch reference if it exists, e.g. `refs/remotes/origin/feature`.
 pub fn fetch_branch(repo: &Repository, remote_name: &str, branch_name: &str) -> anyhow::Result<Option<String>> {
+    match fetch(repo, remote_name, &format!("refs/heads/{branch_name}")) {
+        Ok(_) => Ok(Some(format!("refs/remotes/{remote_name}/{branch_name}"))),
+        Err(e) if e.to_string().contains("couldn't find remote ref") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Pushes the specified reference to the named remote.
+///
+/// NB: This function spawns the `git` CLI as a child process to ensure that
+///     the push respects the user's Git configuration, e.g. authentication.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to push the branch from.
+/// * `remote_name` - The name of the remote to push to, e.g. `origin`.
+/// * `refspec` - The name of the reference to push.
+/// * `force` - Whether to force push the reference.
+///
+/// # Returns
+///
+/// A result indicating whether the push was successful or not.
+pub fn push(repo: &Repository, remote_name: &str, refspec: &str, force: bool) -> anyhow::Result<()> {
     // Prepare `git` arguments.
     let workdir = repo.workdir().unwrap_or(repo.path());
-    let refspec = format!("refs/heads/{branch_name}");
+    let refspec = format!("{}{refspec}:{refspec}", if force { "+" } else { "" });
 
     // Invoke the `git` command.
-    // NB: We use the `git` CLI here to ensure that the fetch respects the user's Git configuration, e.g. authentication.
-    trace!("$ git fetch {} {}", remote_name, refspec);
+    // NB: We use the `git` CLI here to ensure that the push respects the user's Git configuration, e.g. authentication.
+    trace!("$ git push {} {}", remote_name, refspec);
     let child = Command::new("git")
         .current_dir(workdir) // NB: Set both the current directory and `-C`; better safe than sorry.
         .arg("-C")
         .arg(workdir)
-        .args(["fetch", remote_name, &refspec])
-        .arg("--porcelain")
+        .args(["push", remote_name, &refspec])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -304,14 +387,9 @@ pub fn fetch_branch(repo: &Repository, remote_name: &str, branch_name: &str) -> 
     // Check the `git` output.
     if output.status.success() {
         trace!("↳ {}", str::from_utf8(&output.stdout)?);
-        Ok(Some(format!("refs/remotes/{remote_name}/{branch_name}")))
+        Ok(())
     } else {
-        // If the branch does not exist on the remote, return `None`.
-        let stderr = str::from_utf8(&output.stderr).unwrap_or_default();
-        if stderr.contains("couldn't find remote ref") {
-            return Ok(None);
-        }
-        bail!("git error ({}): {}", output.status, stderr);
+        bail!("git error ({}): {}", output.status, str::from_utf8(&output.stderr)?);
     }
 }
 
@@ -330,21 +408,52 @@ pub fn fetch_branch(repo: &Repository, remote_name: &str, branch_name: &str) -> 
 ///
 /// A result indicating whether the push was successful or not.
 pub fn push_branch(repo: &Repository, branch_name: &str, force: bool) -> anyhow::Result<()> {
+    push(repo, "origin", &format!("refs/heads/{branch_name}"), force)
+}
+
+/// Pushes the specified tag to the `origin` remote.
+///
+/// NB: This function spawns the `git` CLI as a child process to ensure that
+///     the push respects the user's Git configuration, e.g. authentication.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to push the branch from.
+/// * `tag_name` - The name of the tag to push.
+/// * `force` - Whether to force push the branch.
+///
+/// # Returns
+///
+/// A result indicating whether the push was successful or not.
+pub fn push_tag(repo: &Repository, tag_name: &str, force: bool) -> anyhow::Result<()> {
+    push(repo, "origin", &format!("refs/tags/{tag_name}"), force)
+}
+
+/// Lists references matching the given pattern on the named remote without fetching them.
+///
+/// NB: This function spawns the `git` CLI as a child process to ensure that
+///     the fetch respects the user's Git configuration, e.g. authentication.
+///
+/// # Arguments
+///
+/// * `repo` - The local Git repository.
+/// * `remote_name` - The name of the remote to query, e.g. `origin`.
+/// * `refspec` - The reference pattern to match, e.g. `refs/tags/*`.
+///
+/// # Returns
+///
+/// A result containing a list of matching references on the remote.
+pub fn ls_remote(repo: &Repository, remote_name: &str, refspec: &str) -> anyhow::Result<Vec<String>> {
     // Prepare `git` arguments.
     let workdir = repo.workdir().unwrap_or(repo.path());
-    let refspec = format!(
-        "{}refs/heads/{branch_name}:refs/heads/{branch_name}",
-        if force { "+" } else { "" }
-    );
 
     // Invoke the `git` command.
-    // NB: We use the `git` CLI here to ensure that the push respects the user's Git configuration, e.g. authentication.
-    trace!("$ git push origin {}", refspec);
+    trace!("$ git ls-remote {} {}", remote_name, refspec);
     let child = Command::new("git")
         .current_dir(workdir) // NB: Set both the current directory and `-C`; better safe than sorry.
         .arg("-C")
         .arg(workdir)
-        .args(["push", "origin", &refspec])
+        .args(["ls-remote", "--refs", "--", remote_name, refspec])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -353,11 +462,34 @@ pub fn push_branch(repo: &Repository, branch_name: &str, force: bool) -> anyhow:
 
     // Check the `git` output.
     if output.status.success() {
-        trace!("↳ {}", str::from_utf8(&output.stdout)?);
-        Ok(())
+        let stdout = str::from_utf8(&output.stdout)?;
+        trace!("↳ {}", stdout);
+        stdout
+            .lines()
+            .map(|line| {
+                let (_, reference) = line.split_once('\t').context("invalid `git ls-remote` output")?;
+                Ok(reference.to_string())
+            })
+            .collect()
     } else {
         bail!("git error ({}): {}", output.status, str::from_utf8(&output.stderr)?);
     }
+}
+
+/// Checks whether the exact tag exists on the named remote without fetching it.
+///
+/// # Arguments
+///
+/// * `repo` - The local Git repository.
+/// * `remote_name` - The name of the remote to query, e.g. `origin`.
+/// * `tag_name` - The name of the tag to check, e.g. `v1.0.0`.
+///
+/// # Returns
+///
+/// A result indicating whether the tag exists on the remote or not.
+pub fn tag_exists_on_remote(repo: &Repository, remote_name: &str, tag_name: &str) -> anyhow::Result<bool> {
+    let refspec = format!("refs/tags/{tag_name}");
+    Ok(ls_remote(repo, remote_name, &refspec)?.contains(&refspec))
 }
 
 /// A parsed Git remote URL containing the host, owner, and repository names.
@@ -717,6 +849,50 @@ mod tests {
         assert!(repo.find_commit(commit_id).is_ok());
     }
 
+    /// Tests that a tag is created correctly and points to the expected commit.
+    #[test]
+    fn test_tag() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+
+        // Create a new file and commit it.
+        temp_dir.child("README.md").write_str("lorem ipsum").unwrap();
+        let commit_id = commit(&repo, &["README.md"], "docs: add `README.md`").unwrap();
+
+        // Create a tag for the commit.
+        tag(&repo, "v1.0.0", commit_id, false).unwrap();
+
+        // Verify that the tag was created and points to the correct commit.
+        let tag_ref = repo.find_reference("refs/tags/v1.0.0").unwrap();
+        assert_eq!(tag_ref.peel_to_commit().unwrap().id(), commit_id);
+    }
+
+    /// Tests that a tag is overwritten correctly when forced and points to the expected commit.
+    #[test]
+    fn test_tag_with_force() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+
+        // Create a new file and commit it.
+        temp_dir.child("README.md").write_str("lorem ipsum").unwrap();
+        let commit_id = commit(&repo, &["README.md"], "docs: add `README.md`").unwrap();
+
+        // Create a tag for the commit.
+        tag(&repo, "v1.0.0", commit_id, false).unwrap();
+
+        // Create a new commit and force overwrite the tag to point to the new commit.
+        temp_dir.child("README.md").write_str("dolor sit amet").unwrap();
+        let new_commit_id = commit(&repo, &["README.md"], "docs: update `README.md`").unwrap();
+
+        // Ensure that only a force tag succeeds.
+        assert!(tag(&repo, "v1.0.0", new_commit_id, false).is_err());
+        tag(&repo, "v1.0.0", new_commit_id, true).unwrap();
+
+        // Verify that the tag was created and points to the correct commit.
+        let tag_ref = repo.find_reference("refs/tags/v1.0.0").unwrap();
+        assert_eq!(tag_ref.peel_to_commit().unwrap().id(), new_commit_id);
+    }
+
     /// Tests that a branch is fetched from the origin remote.
     #[test]
     fn test_fetch_branch() {
@@ -736,7 +912,7 @@ mod tests {
         // Verify that the local repository has the remote branch reference.
         assert_eq!(
             repo.find_reference("refs/remotes/origin/feature").unwrap().target(),
-            Some(base)
+            Some(base),
         );
     }
 
@@ -751,6 +927,71 @@ mod tests {
         // Fetch the branch from the remote.
         let remote_ref = fetch_branch(&repo, "origin", "feature").unwrap();
         assert!(remote_ref.is_none());
+    }
+
+    /// Tests that references are listed from the origin remote.
+    #[test]
+    fn test_ls_remote() {
+        // Create a local and remote Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+        let (_remote_temp_dir, remote_repo) = create_test_repo();
+        repo.remote("origin", remote_repo.path().to_str().unwrap()).unwrap();
+
+        // Create tags and a branch on the remote.
+        let base = remote_repo.head().unwrap().target().unwrap();
+        tag(&remote_repo, "v1.2.3", base, false).unwrap();
+        tag(&remote_repo, "v2.0.0", base, false).unwrap();
+        create_or_reset_branch(&remote_repo, "feature", base).unwrap();
+
+        // List the tags from the remote.
+        let mut remote_refs = ls_remote(&repo, "origin", "refs/tags/*").unwrap();
+        remote_refs.sort();
+
+        // Verify that only matching references are returned.
+        assert_eq!(remote_refs, vec!["refs/tags/v1.2.3", "refs/tags/v2.0.0"]);
+
+        // Verify that the tags were not fetched into the local repository.
+        assert!(repo.find_reference("refs/tags/v1.2.3").is_err());
+        assert!(repo.find_reference("refs/tags/v2.0.0").is_err());
+    }
+
+    /// Tests that a tag exists on the origin remote.
+    #[test]
+    fn test_tag_exists_on_remote() {
+        // Create a local and remote Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+        let (_remote_temp_dir, remote_repo) = create_test_repo();
+        repo.remote("origin", remote_repo.path().to_str().unwrap()).unwrap();
+
+        // Create a tag on the remote.
+        let base = remote_repo.head().unwrap().target().unwrap();
+        tag(&remote_repo, "v1.2.3", base, false).unwrap();
+
+        // Verify that the tag exists on the remote.
+        assert!(tag_exists_on_remote(&repo, "origin", "v1.2.3").unwrap());
+
+        // Verify that the tag was not fetched into the local repository.
+        assert!(repo.find_reference("refs/tags/v1.2.3").is_err());
+    }
+
+    /// Tests that a tag does not exist on the origin remote.
+    #[test]
+    fn test_tag_exists_on_remote_not() {
+        // Create a local and remote Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+        let (_remote_temp_dir, remote_repo) = create_test_repo();
+        repo.remote("origin", remote_repo.path().to_str().unwrap()).unwrap();
+
+        // Create a similarly named tag on the remote.
+        let remote_base = remote_repo.head().unwrap().target().unwrap();
+        tag(&remote_repo, "v1.2.30", remote_base, false).unwrap();
+
+        // Create the requested tag only in the local repository.
+        let local_base = repo.head().unwrap().target().unwrap();
+        tag(&repo, "v1.2.3", local_base, false).unwrap();
+
+        // Verify that the tag does not exist on the remote.
+        assert!(!tag_exists_on_remote(&repo, "origin", "v1.2.3").unwrap());
     }
 
     /// Tests that a branch is pushed to the origin remote.
@@ -770,7 +1011,7 @@ mod tests {
         // Verify that the remote branch points to the local commit.
         assert_eq!(
             remote_repo.find_reference("refs/heads/feature").unwrap().target(),
-            Some(base)
+            Some(base),
         );
     }
 
@@ -803,7 +1044,73 @@ mod tests {
         // Verify that the remote branch points to the rewritten commit.
         assert_eq!(
             remote_repo.find_reference("refs/heads/feature").unwrap().target(),
-            Some(local_version)
+            Some(local_version),
+        );
+    }
+
+    /// Tests that a tag is pushed to the origin remote.
+    #[test]
+    fn test_push_tag() {
+        // Create a local and remote Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+        let remote_dir = assert_fs::TempDir::new().unwrap();
+        let remote_repo = Repository::init_bare(remote_dir.path()).unwrap();
+        repo.remote("origin", remote_dir.path().to_str().unwrap()).unwrap();
+
+        // Create and push a tag.
+        let base = repo.head().unwrap().target().unwrap();
+        tag(&repo, "v1.2.3", base, false).unwrap();
+        push_tag(&repo, "v1.2.3", false).unwrap();
+
+        // Verify that the remote tag points to the local commit.
+        assert_eq!(
+            remote_repo
+                .find_reference("refs/tags/v1.2.3")
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id(),
+            base,
+        );
+    }
+
+    /// Tests that force pushing a tag overwrites the origin remote tag.
+    #[test]
+    fn test_push_tag_with_force() {
+        // Create a local and remote Git repository.
+        let (temp_dir, repo) = create_test_repo();
+        let remote_dir = assert_fs::TempDir::new().unwrap();
+        let remote_repo = Repository::init_bare(remote_dir.path()).unwrap();
+        repo.remote("origin", remote_dir.path().to_str().unwrap()).unwrap();
+
+        // Push a tag and then advance it on the remote.
+        let base = repo.head().unwrap().target().unwrap();
+        tag(&repo, "v1.2.3", base, false).unwrap();
+        push_tag(&repo, "v1.2.3", false).unwrap();
+        temp_dir.child("tracked.txt").write_str("remote version").unwrap();
+        let remote_version = commit(&repo, &["tracked.txt"], "remote version").unwrap();
+        tag(&repo, "v1.2.3", remote_version, true).unwrap();
+        push_tag(&repo, "v1.2.3", true).unwrap();
+
+        // Rewrite the local tag.
+        repo.tag_delete("v1.2.3").unwrap();
+        temp_dir.child("tracked.txt").write_str("local version").unwrap();
+        let local_version = commit(&repo, &["tracked.txt"], "local version").unwrap();
+        tag(&repo, "v1.2.3", local_version, true).unwrap();
+
+        // Ensure that only a force push succeeds.
+        assert!(push_tag(&repo, "v1.2.3", false).is_err());
+        push_tag(&repo, "v1.2.3", true).unwrap();
+
+        // Verify that the remote tag points to the rewritten commit.
+        assert_eq!(
+            remote_repo
+                .find_reference("refs/tags/v1.2.3")
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id(),
+            local_version,
         );
     }
 
@@ -828,7 +1135,7 @@ mod tests {
         assert_eq!(repo.head().unwrap().target(), Some(base_commit));
         assert_eq!(
             std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(),
-            "base"
+            "base",
         );
         assert!(repo.statuses(None).unwrap().is_empty());
     }
@@ -856,7 +1163,7 @@ mod tests {
         assert_eq!(repo.head().unwrap().target(), Some(base_commit));
         assert_eq!(
             std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(),
-            "base"
+            "base",
         );
         assert!(repo.statuses(None).unwrap().is_empty());
     }
@@ -884,7 +1191,7 @@ mod tests {
         assert_eq!(repo.head().unwrap().target(), Some(base_commit));
         assert_eq!(
             std::fs::read_to_string(temp_dir.path().join("tracked.txt")).unwrap(),
-            "base"
+            "base",
         );
         assert!(repo.statuses(None).unwrap().is_empty());
     }
