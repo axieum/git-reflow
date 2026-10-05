@@ -128,10 +128,7 @@ pub async fn apply_release_plan(
 
         // Create or update the pull request for the branch.
         if !dry_run {
-            debug!(
-                "creating pull request: `{}` -> `{}`",
-                branch_name, guard.original_branch
-            );
+            debug!("creating pull request: `{branch_name}` -> `{}`", guard.original_branch);
             let mut pr = config
                 .git
                 .provider
@@ -153,6 +150,10 @@ pub async fn apply_release_plan(
             );
             pull_requests.push(pr);
         } else {
+            debug!(
+                "creating pull request: `{branch_name}` -> `{}` (dry run)",
+                guard.original_branch,
+            );
             debug!("🔀 created pull request (dry run)");
             pull_requests.push(PullRequest {
                 number: 0,

@@ -41,6 +41,10 @@ pub struct PackageConfig {
     /// **Default:** `CHANGELOG.md`
     #[serde(default = "default_changelog_path")]
     pub changelog_path: Option<String>,
+    /// If `true`, only create a git tag for this package without creating a release.
+    ///
+    /// **Default:** `false`
+    pub tag_only: bool,
 }
 
 /// Returns the default value for `$.changelog_path`.
@@ -65,6 +69,8 @@ impl Default for PackageConfig {
             include_name_in_tag: true,
             // The default changelog path is `CHANGELOG.md` relative to the package directory.
             changelog_path: Some(String::from("CHANGELOG.md")),
+            // By default, create both a git tag and a release for this package.
+            tag_only: false,
         }
     }
 }

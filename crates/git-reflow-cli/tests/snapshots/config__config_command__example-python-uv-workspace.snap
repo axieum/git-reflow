@@ -23,7 +23,8 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       },
       "workspace": true,
       "include-name-in-tag": false,
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "tag-only": false
     },
     {
       "dir": "packages/example-api",
@@ -34,7 +35,8 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       },
       "workspace": true,
       "include-name-in-tag": true,
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "tag-only": false
     },
     {
       "dir": "packages/example-cli",
@@ -45,7 +47,8 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       },
       "workspace": true,
       "include-name-in-tag": true,
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "tag-only": false
     }
   ]
 }

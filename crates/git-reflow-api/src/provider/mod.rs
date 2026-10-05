@@ -90,7 +90,7 @@ pub trait BaseGitProvider {
     ///
     /// # Arguments
     ///
-    /// * `owner` - The owner of the repository (user or organization).
+    /// * `owner` - The owner of the repository (user or organisation).
     /// * `repo` - The name of the repository.
     /// * `head` - The name of the branch where your changes are implemented.
     /// * `base` - The name of the branch you want the changes pulled into.
@@ -109,6 +109,30 @@ pub trait BaseGitProvider {
         title: &str,
         body: &str,
     ) -> anyhow::Result<PullRequest>;
+
+    /// Creates a release on the Git provider if it does not already exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner of the repository (user or organisation).
+    /// * `repo` - The name of the repository.
+    /// * `tag_name` - The name of the tag for the release.
+    /// * `commit_sha` - The commit SHA that the release is associated with.
+    /// * `title` - The title of the release.
+    /// * `body` - The body content of the release.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a URL to the release.
+    async fn upsert_release(
+        &self,
+        owner: &str,
+        repo: &str,
+        tag_name: &str,
+        commit_sha: &str,
+        title: &str,
+        body: &str,
+    ) -> anyhow::Result<String>;
 }
 
 #[async_trait]
@@ -135,6 +159,24 @@ impl BaseGitProvider for GitProvider {
     ) -> anyhow::Result<PullRequest> {
         match self {
             GitProvider::GitHub(provider) => provider.upsert_pull_request(owner, repo, head, base, title, body).await,
+        }
+    }
+
+    async fn upsert_release(
+        &self,
+        owner: &str,
+        repo: &str,
+        tag_name: &str,
+        commit_sha: &str,
+        title: &str,
+        body: &str,
+    ) -> anyhow::Result<String> {
+        match self {
+            GitProvider::GitHub(provider) => {
+                provider
+                    .upsert_release(owner, repo, tag_name, commit_sha, title, body)
+                    .await
+            }
         }
     }
 }
