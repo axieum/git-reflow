@@ -4,5 +4,6 @@ pub mod git;
 pub mod git_cliff;
 pub mod plan;
 pub mod provider;
+pub mod release;
 pub mod settings;
 pub mod strategy;

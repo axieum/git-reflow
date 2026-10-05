@@ -191,6 +191,43 @@ impl BaseGitProvider for GitHubProvider {
             packages: vec![],
         })
     }
+
+    async fn upsert_release(
+        &self,
+        owner: &str,
+        repo: &str,
+        tag_name: &str,
+        commit_sha: &str,
+        title: &str,
+        body: &str,
+    ) -> anyhow::Result<String> {
+        let client = self.client()?;
+        let repos = client.repos(owner, repo);
+        let releases = repos.releases();
+
+        // Check for an existing release with the same tag name.
+        trace!("find release with tag name: {}", tag_name);
+        if let Ok(release) = releases.get_by_tag(tag_name).await.context("could not find release") {
+            trace!(
+                "release with tag name `{}` already exists: {}",
+                tag_name, release.html_url,
+            );
+            return Ok(release.html_url.to_string());
+        }
+
+        // A release does not exist yet, create one.
+        trace!("creating new release with tag name: {}", tag_name);
+        let created = releases
+            .create(tag_name)
+            .target_commitish(commit_sha)
+            .name(title)
+            .body(body)
+            .send()
+            .await
+            .context("failed to create release")?;
+
+        Ok(created.html_url.to_string())
+    }
 }
 
 #[cfg(test)]

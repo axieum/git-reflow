@@ -1,6 +1,7 @@
 use crate::commands::config::ConfigCommand;
 use crate::commands::plan::PlanCommand;
 use crate::commands::pr::PullRequestCommand;
+use crate::commands::release::ReleaseCommand;
 use clap::{ColorChoice, Parser, builder::PathBufValueParser};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use git_reflow_api::settings;
@@ -36,6 +37,8 @@ pub enum Command {
     /// Create or update release pull request/s for changes to package/s.
     #[command(name = "pr")]
     PullRequest(PullRequestCommand),
+    /// Tags and releases the most recently merged release pull request.
+    Release(ReleaseCommand),
     /// Print the configuration and exit.
     Config(ConfigCommand),
 }
@@ -91,6 +94,8 @@ async fn run(cli: CliArgs) -> anyhow::Result<()> {
         Command::Plan(cmd) => cmd.plan(&config).await?,
         // $ git reflow pr [package] ...
         Command::PullRequest(cmd) => cmd.create_pull_requests(&config).await?,
+        // $ git reflow release
+        Command::Release(cmd) => cmd.release(&config).await?,
     }
 
     Ok(())
