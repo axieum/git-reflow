@@ -120,10 +120,12 @@ pub trait BaseGitProvider {
     /// * `commit_sha` - The commit SHA that the release is associated with.
     /// * `title` - The title of the release.
     /// * `body` - The body content of the release.
+    /// * `make_latest` - Whether to mark the release as the latest release.
     ///
     /// # Returns
     ///
     /// A result containing a URL to the release.
+    #[allow(clippy::too_many_arguments)]
     async fn upsert_release(
         &self,
         owner: &str,
@@ -132,6 +134,7 @@ pub trait BaseGitProvider {
         commit_sha: &str,
         title: &str,
         body: &str,
+        make_latest: bool,
     ) -> anyhow::Result<String>;
 }
 
@@ -170,11 +173,12 @@ impl BaseGitProvider for GitProvider {
         commit_sha: &str,
         title: &str,
         body: &str,
+        make_latest: bool,
     ) -> anyhow::Result<String> {
         match self {
             GitProvider::GitHub(provider) => {
                 provider
-                    .upsert_release(owner, repo, tag_name, commit_sha, title, body)
+                    .upsert_release(owner, repo, tag_name, commit_sha, title, body, make_latest)
                     .await
             }
         }

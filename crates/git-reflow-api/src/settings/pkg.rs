@@ -45,6 +45,10 @@ pub struct PackageConfig {
     ///
     /// **Default:** `false`
     pub tag_only: bool,
+    /// If `true`, mark this release as the latest on the Git provider.
+    ///
+    /// **Default:** `true`
+    pub make_latest: bool,
 }
 
 /// Returns the default value for `$.changelog_path`.
@@ -71,6 +75,8 @@ impl Default for PackageConfig {
             changelog_path: Some(String::from("CHANGELOG.md")),
             // By default, create both a git tag and a release for this package.
             tag_only: false,
+            // By default, mark this release as the latest on the Git provider.
+            make_latest: true,
         }
     }
 }
@@ -174,6 +180,8 @@ mod tests {
         assert!(config.workspace);
         assert!(config.include_name_in_tag);
         assert_eq!(config.changelog_path(), Some(PathBuf::from(".").join("CHANGELOG.md")));
+        assert!(!config.tag_only);
+        assert!(config.make_latest);
     }
 
     /// Tests that the package directory is always serialised with forward slashes, regardless of platform.

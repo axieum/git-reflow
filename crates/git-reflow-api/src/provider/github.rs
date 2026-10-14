@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use octocrab::Octocrab;
 use octocrab::commits::PullRequestTarget;
 use octocrab::params::State;
+use octocrab::repos::releases::MakeLatest;
 use std::borrow::Cow;
 use std::env;
 use std::sync::OnceLock;
@@ -200,6 +201,7 @@ impl BaseGitProvider for GitHubProvider {
         commit_sha: &str,
         title: &str,
         body: &str,
+        make_latest: bool,
     ) -> anyhow::Result<String> {
         let client = self.client()?;
         let repos = client.repos(owner, repo);
@@ -222,6 +224,11 @@ impl BaseGitProvider for GitHubProvider {
             .target_commitish(commit_sha)
             .name(title)
             .body(body)
+            .make_latest(if make_latest {
+                MakeLatest::True
+            } else {
+                MakeLatest::False
+            })
             .send()
             .await
             .context("failed to create release")?;
@@ -492,6 +499,99 @@ pub(crate) mod tests {
                 existing: true,
                 packages: vec![],
             },
+        );
+    }
+
+    /// Tests that a new release is created when one with the same tag name does not exist yet.
+    #[rstest]
+    #[tokio::test]
+    async fn test_upsert_release_creates_a_new_release(
+        provider: GitHubProvider,
+        #[values(true, false)] make_latest: bool,
+    ) {
+        // Set up a mock server to simulate the GitHub API.
+        let server = mock_octocrab(&provider).await;
+        let get_mock = server.mock(|when, then| {
+            when.method(GET).path("/repos/octocat/Hello-World/releases/tags/v1.0.0");
+            then.status(404)
+                .header("content-type", "application/json")
+                .body(r#"{"message":"Not Found"}"#);
+        });
+        let create_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/repos/octocat/Hello-World/releases")
+                .json_body(serde_json::json!({
+                    "tag_name": "v1.0.0",
+                    "target_commitish": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+                    "name": "Release v1.0.0",
+                    "body": "...",
+                    "make_latest": if make_latest { "true" } else { "false" },
+                }));
+            then.status(201)
+                .header("content-type", "application/json")
+                .body(include_str!("../../tests/fixtures/github_releases_retrieve.json"));
+        });
+
+        // Create a new release.
+        let release = provider
+            .upsert_release(
+                "octocat",
+                "Hello-World",
+                "v1.0.0",
+                "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+                "Release v1.0.0",
+                "...",
+                make_latest,
+            )
+            .await;
+
+        // Ensure the release was created successfully.
+        get_mock.assert_async().await;
+        create_mock.assert_async().await;
+        assert_eq!(
+            release.unwrap(),
+            "https://github.com/octocat/Hello-World/releases/v1.0.0"
+        );
+    }
+
+    /// Tests that an existing release is returned when one with the same tag name already exists.
+    #[rstest]
+    #[tokio::test]
+    async fn test_upsert_release_returns_an_existing_release(provider: GitHubProvider) {
+        // Set up a mock server to simulate the GitHub API.
+        let server = mock_octocrab(&provider).await;
+        let get_mock = server.mock(|when, then| {
+            when.method(GET).path("/repos/octocat/Hello-World/releases/tags/v1.0.0");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!("../../tests/fixtures/github_releases_retrieve.json"));
+        });
+        let create_mock = server.mock(|when, then| {
+            when.method(POST).path("/repos/octocat/Hello-World/releases");
+            then.status(201)
+                .header("content-type", "application/json")
+                .body(include_str!("../../tests/fixtures/github_releases_retrieve.json"));
+        });
+
+        // Retrieve an existing release.
+        let release = provider
+            .upsert_release(
+                "octocat",
+                "Hello-World",
+                "v1.0.0",
+                "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+                "Release v1.0.0",
+                "...",
+                true,
+            )
+            .await;
+
+        // Ensure the existing release was returned without creating a new one.
+        get_mock.assert_async().await;
+        create_mock.assert_calls_async(0).await;
+        assert_eq!(
+            release.unwrap(),
+            "https://github.com/octocat/Hello-World/releases/v1.0.0"
         );
     }
 }

@@ -295,6 +295,7 @@ impl PythonStrategy {
                 PackageConfig {
                     dir: path,
                     strategy: Some(Strategy::Python(PythonStrategy::default())),
+                    make_latest: false,
                     ..Default::default()
                 }
                 .apply_defaults()

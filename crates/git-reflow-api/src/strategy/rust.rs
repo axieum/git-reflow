@@ -144,6 +144,7 @@ impl BaseStrategy for RustStrategy {
                 PackageConfig {
                     dir: path,
                     strategy: Some(Strategy::Rust(RustStrategy::default())),
+                    make_latest: false,
                     ..Default::default()
                 }
                 .apply_defaults()

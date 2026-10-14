@@ -1,6 +1,6 @@
 use crate::git::{get_origin_remote, push_tag, tag, tag_exists_on_remote};
 use crate::provider::{BaseGitProvider, parse_pull_request_body};
-use crate::settings::AppConfig;
+use crate::settings::{AppConfig, pkg::PackageConfig};
 use anyhow::{Context, anyhow, ensure};
 use semver::Version;
 use tracing::{debug, trace};
@@ -70,8 +70,13 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
                     i + 1,
                     pr.packages.len(),
                     pkg.name,
-                    pkg.version
+                    pkg.version,
                 );
+                let pkg_config = config
+                    .get_package(&pkg.name)
+                    .ok_or_else(|| anyhow!("package `{}` is not configured", pkg.name))?;
+
+                // Ensure that the package has a changelog in the pull request body.
                 ensure!(
                     pkg.changelog_md.is_some(),
                     "package `{} v{}` is missing a changelog in the pull request body",
@@ -82,7 +87,7 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
                 trace!("↳ {changelog_md}");
 
                 // Check if a Git tag already exists for this package name and version.
-                let tag_name = build_git_tag_name(config, &pkg.name, &pkg.version)?;
+                let tag_name = build_git_tag_name(pkg_config, &pkg.name, &pkg.version)?;
                 if tag_exists_on_remote(&repo, "origin", &tag_name)? {
                     debug!("tag `{}` already exists, skipping package", tag_name);
                     continue;
@@ -105,7 +110,7 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
                 }
 
                 // If the package is configured as `tag-only`, we are done.
-                if config.get_package(&pkg.name).is_some_and(|p| p.tag_only) {
+                if pkg_config.tag_only {
                     debug!("package `{}` is configured with `tag-only`, skipping release", pkg.name);
                     releases.push(ReleasedPackage {
                         package_name: pkg.name.clone(),
@@ -118,7 +123,7 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
                 }
 
                 // Create a release on the Git provider for the package release.
-                let release_title = build_release_title(config, &pkg.name, &pkg.version)?;
+                let release_title = build_release_title(pkg_config, &pkg.name, &pkg.version)?;
                 let release_url = if !dry_run {
                     debug!("creating {} release: {release_title}", config.git.provider);
                     let url = config
@@ -131,6 +136,7 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
                             &commit_sha,
                             &release_title,
                             changelog_md,
+                            pkg_config.make_latest,
                         )
                         .await?;
                     debug!("🚀 created {} release at {url}", config.git.provider);
@@ -165,19 +171,15 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
 ///
 /// # Arguments
 ///
-/// * `config` - The app configuration.
+/// * `pkg_config` - The package configuration.
 /// * `package_name` - The name of the package being released.
 /// * `version` - The version of the package being released.
 ///
 /// # Returns
 ///
 /// A result containing the Git tag name, e.g. `v1.2.3` or `example-api-v1.2.3`.
-pub fn build_git_tag_name(config: &AppConfig, package_name: &str, version: &Version) -> anyhow::Result<String> {
-    let include_name_in_tag = config
-        .get_package(package_name)
-        .ok_or_else(|| anyhow!("package `{package_name}` is not configured"))?
-        .include_name_in_tag;
-    Ok(if include_name_in_tag {
+pub fn build_git_tag_name(pkg_config: &PackageConfig, package_name: &str, version: &Version) -> anyhow::Result<String> {
+    Ok(if pkg_config.include_name_in_tag {
         format!("{}-v{}", package_name, version)
     } else {
         format!("v{}", version)
@@ -188,19 +190,19 @@ pub fn build_git_tag_name(config: &AppConfig, package_name: &str, version: &Vers
 ///
 /// # Arguments
 ///
-/// * `config` - The app configuration.
+/// * `pkg_config` - The package configuration.
 /// * `package_name` - The name of the package being released.
 /// * `version` - The version of the package being released.
 ///
 /// # Returns
 ///
 /// A result containing the release title, e.g. `v1.2.3` or `example-api: v1.2.3`.
-pub fn build_release_title(config: &AppConfig, package_name: &str, version: &Version) -> anyhow::Result<String> {
-    let include_name_in_title = config
-        .get_package(package_name)
-        .ok_or_else(|| anyhow!("package `{package_name}` is not configured"))?
-        .include_name_in_tag;
-    Ok(if include_name_in_title {
+pub fn build_release_title(
+    pkg_config: &PackageConfig,
+    package_name: &str,
+    version: &Version,
+) -> anyhow::Result<String> {
+    Ok(if pkg_config.include_name_in_tag {
         format!("{}: v{}", package_name, version)
     } else {
         format!("v{}", version)
@@ -216,12 +218,9 @@ mod tests {
     /// Tests that a Git tag name is built correctly for a package that includes its name in the tag.
     #[test]
     fn test_build_git_tag_name() {
-        let config = AppConfig {
-            packages: vec![PackageConfig {
-                name: Some("example-package".to_string()),
-                include_name_in_tag: true,
-                ..Default::default()
-            }],
+        let config = PackageConfig {
+            name: Some("example-package".to_string()),
+            include_name_in_tag: true,
             ..Default::default()
         };
         assert_eq!(
@@ -233,12 +232,9 @@ mod tests {
     /// Tests that the built Git tag name does not include the package name when `include_name_in_tag` is false.
     #[test]
     fn test_build_git_tag_name_without_include_name_in_tag() {
-        let config = AppConfig {
-            packages: vec![PackageConfig {
-                name: Some("example-package".to_string()),
-                include_name_in_tag: false,
-                ..Default::default()
-            }],
+        let config = PackageConfig {
+            name: Some("example-package".to_string()),
+            include_name_in_tag: false,
             ..Default::default()
         };
         assert_eq!(
@@ -250,12 +246,9 @@ mod tests {
     /// Tests that a release title is built correctly for a package that includes its name in the tag.
     #[test]
     fn test_build_release_title() {
-        let config = AppConfig {
-            packages: vec![PackageConfig {
-                name: Some("example-package".to_string()),
-                include_name_in_tag: true,
-                ..Default::default()
-            }],
+        let config = PackageConfig {
+            name: Some("example-package".to_string()),
+            include_name_in_tag: true,
             ..Default::default()
         };
         assert_eq!(
@@ -267,12 +260,9 @@ mod tests {
     /// Tests that the built release title does not include the package name when `include_name_in_tag` is false.
     #[test]
     fn test_build_release_title_without_include_name_in_tag() {
-        let config = AppConfig {
-            packages: vec![PackageConfig {
-                name: Some("example-package".to_string()),
-                include_name_in_tag: false,
-                ..Default::default()
-            }],
+        let config = PackageConfig {
+            name: Some("example-package".to_string()),
+            include_name_in_tag: false,
             ..Default::default()
         };
         assert_eq!(
