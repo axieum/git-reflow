@@ -30,9 +30,14 @@ pub struct GitConfig {
     pub commit_message_pattern: String,
     /// If `true`, create separate pull requests for each package.
     ///
-    /// **Default**: `false`
+    /// **Default:** `false`
     #[serde(default)]
     pub separate_pull_requests: bool,
+    /// If `true`, create additional tags for both major (e.g. v1) and minor (e.g. v1.2) _stable_ versions.
+    ///
+    /// **Default:** `true`
+    #[serde(default = "default_tag_major_and_minor")]
+    pub tag_major_and_minor: bool,
 }
 
 /// Returns the default value for `$.commit_message_pattern`.
@@ -45,6 +50,11 @@ fn default_release_branch_prefix() -> String {
     String::from("reflow--branches--")
 }
 
+/// Returns the default value for `$.tag_major_and_minor`.
+fn default_tag_major_and_minor() -> bool {
+    true
+}
+
 impl Default for GitConfig {
     fn default() -> Self {
         Self {
@@ -52,6 +62,7 @@ impl Default for GitConfig {
             release_branch_prefix: default_release_branch_prefix(),
             commit_message_pattern: default_commit_message_pattern(),
             separate_pull_requests: false,
+            tag_major_and_minor: true,
         }
     }
 }

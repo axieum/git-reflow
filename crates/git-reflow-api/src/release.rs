@@ -3,6 +3,7 @@ use crate::provider::{BaseGitProvider, parse_pull_request_body};
 use crate::settings::{AppConfig, pkg::PackageConfig};
 use anyhow::{Context, anyhow, ensure};
 use semver::Version;
+use std::fmt::Display;
 use tracing::{debug, trace};
 
 /// A package that has been released.
@@ -13,6 +14,16 @@ pub struct ReleasedPackage {
     pub package_name: String,
     /// The version of the package.
     pub version: Version,
+    /// The major version of the package.
+    pub major: u64,
+    /// The minor version of the package.
+    pub minor: u64,
+    /// The patch version of the package.
+    pub patch: u64,
+    /// The pre-release version of the package, if any.
+    pub pre: Option<String>,
+    /// The build metadata in the version of the package, if any.
+    pub build: Option<String>,
     /// The Git tag name for the package release, if created.
     pub tag_name: Option<String>,
     /// The URL of the release on the Git provider, if created.
@@ -81,7 +92,7 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
                     pkg.changelog_md.is_some(),
                     "package `{} v{}` is missing a changelog in the pull request body",
                     pkg.name,
-                    pkg.version
+                    pkg.version,
                 );
                 let changelog_md = pkg.changelog_md.as_ref().unwrap();
                 trace!("↳ {changelog_md}");
@@ -93,20 +104,33 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
                     continue;
                 }
 
-                // Create a Git tag for the package release.
-                if !dry_run {
-                    debug!("🏷️ create tag `{tag_name}`");
-                    tag(&repo, &tag_name, commit, true)?;
+                // Prepare any additional Git tags for the package release, if configured.
+                let extra_tags = if config.git.tag_major_and_minor && pkg.version.pre.is_empty() {
+                    vec![
+                        build_git_tag_name(
+                            pkg_config,
+                            &pkg.name,
+                            format_args!("{}.{}", pkg.version.major, pkg.version.minor),
+                        )?,
+                        build_git_tag_name(pkg_config, &pkg.name, pkg.version.major)?,
+                    ]
                 } else {
-                    debug!("🏷️ create tag `{tag_name}` (dry run)");
-                }
+                    vec![]
+                };
 
-                // Push the Git tag to the remote repository.
-                if !dry_run {
-                    debug!("push tag `{tag_name}` to remote `{}`", remote.url);
-                    push_tag(&repo, &tag_name, true)?;
-                } else {
-                    debug!("push tag `{tag_name}` to remote `{}` (dry run)", remote.url);
+                // Create and push Git tag(s) for the package release.
+                for name in std::iter::once(&tag_name).chain(extra_tags.iter()) {
+                    if !dry_run {
+                        // Create a Git tag for the package release.
+                        debug!("🏷️ create tag `{name}`");
+                        tag(&repo, name, commit, true)?;
+                        // Push the Git tag to the remote repository.
+                        debug!("push tag `{name}` to remote `{}`", remote.url);
+                        push_tag(&repo, name, true)?;
+                    } else {
+                        debug!("🏷️ create tag `{name}` (dry run)");
+                        debug!("push tag `{name}` to remote `{}` (dry run)", remote.url);
+                    }
                 }
 
                 // If the package is configured as `tag-only`, we are done.
@@ -115,6 +139,11 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
                     releases.push(ReleasedPackage {
                         package_name: pkg.name.clone(),
                         version: pkg.version.clone(),
+                        major: pkg.version.major,
+                        minor: pkg.version.minor,
+                        patch: pkg.version.patch,
+                        pre: (!pkg.version.pre.is_empty()).then(|| pkg.version.pre.to_string()),
+                        build: (!pkg.version.build.is_empty()).then(|| pkg.version.build.to_string()),
                         tag_name: Some(tag_name),
                         url: None,
                         changelog_md: changelog_md.to_owned(),
@@ -151,6 +180,11 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
                 releases.push(ReleasedPackage {
                     package_name: pkg.name.clone(),
                     version: pkg.version.clone(),
+                    major: pkg.version.major,
+                    minor: pkg.version.minor,
+                    patch: pkg.version.patch,
+                    pre: (!pkg.version.pre.is_empty()).then(|| pkg.version.pre.to_string()),
+                    build: (!pkg.version.build.is_empty()).then(|| pkg.version.build.to_string()),
                     tag_name: Some(tag_name),
                     url: release_url,
                     changelog_md: changelog_md.to_owned(),
@@ -178,7 +212,11 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
 /// # Returns
 ///
 /// A result containing the Git tag name, e.g. `v1.2.3` or `example-api-v1.2.3`.
-pub fn build_git_tag_name(pkg_config: &PackageConfig, package_name: &str, version: &Version) -> anyhow::Result<String> {
+pub fn build_git_tag_name(
+    pkg_config: &PackageConfig,
+    package_name: &str,
+    version: impl Display,
+) -> anyhow::Result<String> {
     Ok(if pkg_config.include_name_in_tag {
         format!("{}-v{}", package_name, version)
     } else {
@@ -344,6 +382,11 @@ mod tests {
         let release = &releases[0];
         assert_eq!(release.package_name, pkg.name);
         assert_eq!(release.version, pkg.version);
+        assert_eq!(release.major, pkg.version.major);
+        assert_eq!(release.minor, pkg.version.minor);
+        assert_eq!(release.patch, pkg.version.patch);
+        assert!(release.pre.is_none());
+        assert!(release.build.is_none());
         assert_eq!(release.tag_name.as_deref(), Some("v1.1.0"));
         assert_eq!(
             release.url.as_deref(),
@@ -499,12 +542,158 @@ mod tests {
         for ((release, pkg), (tag_name, _, _)) in releases.iter().zip(&packages).zip(expected_releases) {
             assert_eq!(release.package_name, pkg.name);
             assert_eq!(release.version, pkg.version);
+            assert_eq!(release.major, pkg.version.major);
+            assert_eq!(release.minor, pkg.version.minor);
+            assert_eq!(release.patch, pkg.version.patch);
+            assert!(release.pre.is_none());
+            assert!(release.build.is_none());
             assert_eq!(release.tag_name.as_deref(), Some(tag_name));
             assert_eq!(
                 release.url.as_deref(),
                 Some(format!("https://github.com/octocat/Hello-World/releases/{tag_name}").as_str()),
             );
             assert_eq!(release.changelog_md, pkg.changelog_md.as_ref().unwrap().as_str());
+        }
+    }
+
+    /// Tests that major and minor Git tags are created if the `git.tag-major-and-minor` setting is configured.
+    #[rstest]
+    #[tokio::test]
+    async fn test_create_releases_with_tag_major_and_minor(
+        #[with("example-rust")] project_repo: (TempDir, Repository),
+        #[values(true, false)] tag_major_and_minor: bool,
+    ) {
+        // Create a Git repository and add an `origin` remote so that release tags can be pushed to it.
+        let (project_dir, repo) = project_repo;
+        let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+
+        // Load the configuration for the project repository.
+        std::env::set_current_dir(&project_dir).unwrap();
+        let mut config = crate::settings::load(None).unwrap();
+        config.git.separate_pull_requests = true;
+        config.git.tag_major_and_minor = tag_major_and_minor;
+
+        // Commit the current files to the `main` branch.
+        repo.set_head("refs/heads/main").unwrap();
+        let head = commit(&repo, &["."], "chore: release v1.1.0").unwrap();
+
+        // Prepare the package included in the release pull request.
+        let pkg = PullRequestPackage {
+            name: "example-rust".to_string(),
+            version: Version::parse("1.2.3").unwrap(),
+            changelog_md: Some(
+                indoc! {r#"
+                    ## [1.2.3] - 2026-10-15
+
+                    ### Features
+
+                    - Print subtractions
+                    "#}
+                .to_string(),
+            ),
+        };
+
+        // Set up a mock server to simulate the GitHub API.
+        let provider = GitHubProvider::default();
+        let server = mock_octocrab(&provider).await;
+        server.mock(|when, then| {
+            let mut body: serde_json::Value =
+                serde_json::from_str(include_str!("../tests/fixtures/github_commit_pulls.json")).unwrap();
+            body[0]["head"]["ref"] = json!("reflow--branches--main--example-rust");
+            body[0]["body"] = json!(indoc! {r#"
+                ---
+                packages:
+                - name: example-rust
+                  version: 1.2.3
+                ---
+
+                ## [1.2.3] - 2026-10-15
+
+                ### Features
+
+                - Print subtractions
+                "#});
+
+            when.method(GET)
+                .path(format!("/repos/octocat/Hello-World/commits/{head}/pulls"));
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(body);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/repos/octocat/Hello-World/releases/tags/v1.1.0");
+            then.status(404)
+                .header("content-type", "application/json")
+                .body(r#"{"message":"Not Found"}"#);
+        });
+        server.mock(|when, then| {
+            let mut body: serde_json::Value =
+                serde_json::from_str(include_str!("../tests/fixtures/github_releases_retrieve.json")).unwrap();
+            body["html_url"] = json!("https://github.com/octocat/Hello-World/releases/v1.2.3");
+
+            when.method(POST)
+                .path("/repos/octocat/Hello-World/releases")
+                .json_body(json!({
+                    "tag_name": "v1.2.3",
+                    "target_commitish": head.to_string(),
+                    "name": "v1.2.3",
+                    "body": pkg.changelog_md,
+                    "make_latest": "true",
+                }));
+            then.status(201)
+                .header("content-type", "application/json")
+                .json_body(body);
+        });
+        config.git.provider = GitProvider::GitHub(provider);
+
+        // Call `create_releases` for the current commit.
+        create_releases(&config, false).await.unwrap();
+
+        // Verify that release tag was created locally and pushed to the remote at the current commit.
+        assert_eq!(repo.head().unwrap().target().unwrap(), head);
+        assert!(repo.statuses(None).unwrap().is_empty());
+        assert_eq!(
+            repo.find_reference("refs/tags/v1.2.3")
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id(),
+            head,
+        );
+        assert_eq!(
+            remote_repo
+                .find_reference("refs/tags/v1.2.3")
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id(),
+            head,
+        );
+
+        // Verify that the major and minor tags were created locally and pushed to the remote, if configured.
+        for tag_name in ["v1.2", "v1"] {
+            if tag_major_and_minor {
+                assert_eq!(
+                    repo.find_reference(&format!("refs/tags/{}", tag_name))
+                        .unwrap()
+                        .peel_to_commit()
+                        .unwrap()
+                        .id(),
+                    head,
+                );
+                assert_eq!(
+                    remote_repo
+                        .find_reference(&format!("refs/tags/{}", tag_name))
+                        .unwrap()
+                        .peel_to_commit()
+                        .unwrap()
+                        .id(),
+                    head,
+                );
+            } else {
+                assert!(repo.find_reference(&format!("refs/tags/{}", tag_name)).is_err());
+                assert!(remote_repo.find_reference(&format!("refs/tags/{}", tag_name)).is_err());
+            }
         }
     }
 
@@ -652,6 +841,24 @@ mod tests {
         assert_eq!(
             build_git_tag_name(&config, "example-package", &Version::parse("1.2.0").unwrap()).unwrap(),
             "example-package-v1.2.0",
+        );
+    }
+
+    /// Tests that a Git tag name is built correctly for a manually provided version string, e.g. `1.2`.
+    #[test]
+    fn test_build_git_tag_name_with_display_version() {
+        let config = PackageConfig {
+            name: Some("example-package".to_string()),
+            include_name_in_tag: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            build_git_tag_name(&config, "example-package", "1").unwrap(),
+            "example-package-v1"
+        );
+        assert_eq!(
+            build_git_tag_name(&config, "example-package", "1.2").unwrap(),
+            "example-package-v1.2"
         );
     }
 
