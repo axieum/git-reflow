@@ -1,0 +1,42 @@
+---
+source: crates/git-reflow-cli/tests/release.rs
+expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
+---
+[
+  {
+    "package-name": "example-rust-workspace",
+    "version": "0.3.0",
+    "major": 0,
+    "minor": 3,
+    "patch": 0,
+    "pre": null,
+    "build": null,
+    "tag-name": "v0.3.0",
+    "url": "https://github.com/octocat/Hello-World/releases/v0.3.0",
+    "changelog-md": "## [0.3.0] - [DATE]\n\n### Features\n\n- Add a `subtract` function and print subtractions\n"
+  },
+  {
+    "package-name": "example-api",
+    "version": "0.2.0",
+    "major": 0,
+    "minor": 2,
+    "patch": 0,
+    "pre": null,
+    "build": null,
+    "tag-name": "example-api-v0.2.0",
+    "url": "https://github.com/octocat/Hello-World/releases/example-api-v0.2.0",
+    "changelog-md": "## [0.2.0] - [DATE]\n\n### Features\n\n- Add a `subtract` function\n"
+  },
+  {
+    "package-name": "example-cli",
+    "version": "0.3.0",
+    "major": 0,
+    "minor": 3,
+    "patch": 0,
+    "pre": null,
+    "build": null,
+    "tag-name": "example-cli-v0.3.0",
+    "url": "https://github.com/octocat/Hello-World/releases/example-cli-v0.3.0",
+    "changelog-md": "## [0.3.0] - [DATE]\n\n### Features\n\n- Print subtractions\n"
+  }
+]

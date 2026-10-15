@@ -1,0 +1,18 @@
+---
+source: crates/git-reflow-cli/tests/release.rs
+expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
+---
+[
+  {
+    "package-name": "example-rust",
+    "version": "1.1.0",
+    "major": 1,
+    "minor": 1,
+    "patch": 0,
+    "pre": null,
+    "build": null,
+    "tag-name": "v1.1.0",
+    "url": "https://github.com/octocat/Hello-World/releases/v1.1.0",
+    "changelog-md": "## [1.1.0] - [DATE]\n\n### Features\n\n- Print subtractions\n\n"
+  }
+]
