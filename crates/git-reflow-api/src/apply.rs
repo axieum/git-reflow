@@ -1,6 +1,6 @@
 use crate::git::{
     BranchGuard, commit, create_or_reset_branch, ensure_clean_working_directory, fetch_branch, get_origin_remote,
-    push_branch, sanitize_branch_name, trees_match,
+    push_branch, sanitize_branch_name, stage, trees_match,
 };
 use crate::git_cliff::write_changelog_markdown;
 use crate::plan::PackageRelease;
@@ -22,6 +22,7 @@ use tracing::{debug, trace, warn};
 /// # Returns
 ///
 /// A result containing the pull requests created or updated by the release plan.
+/// Release groups whose remote branch already matches are skipped.
 pub async fn apply_release_plan(
     config: &AppConfig,
     plan: &[PackageRelease],
@@ -102,6 +103,23 @@ pub async fn apply_release_plan(
             changed_files.extend(files);
         }
 
+        // Skip the release if the staged tree already matches the remote.
+        if !dry_run {
+            let tree_id = stage(&repo, &changed_files)?;
+            if !should_push_to_remote(&repo, &branch_name, pr_title, tree_id)? {
+                debug!(
+                    "branch `{}` is already up-to-date with remote `{}`",
+                    branch_name, remote.url,
+                );
+                repo.reset(
+                    repo.find_commit(guard.original_commit_id)?.as_object(),
+                    git2::ResetType::Hard,
+                    None,
+                )?;
+                continue;
+            }
+        }
+
         // Commit the changes to the branch.
         if !dry_run {
             debug!("commit changes to branch `{}`", branch_name);
@@ -111,17 +129,10 @@ pub async fn apply_release_plan(
             debug!("✅ created commit `{}` (dry run)", &pr_title);
         }
 
-        // Push the branch to the remote Git repository, if it is not already up-to-date with the remote.
+        // Push the branch to the remote Git repository.
         if !dry_run {
-            if should_push_to_remote(&repo, &branch_name, pr_title)? {
-                debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
-                push_branch(&repo, &branch_name, true)?;
-            } else {
-                debug!(
-                    "branch `{}` is already up-to-date with remote `{}`",
-                    branch_name, remote.url
-                );
-            }
+            debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
+            push_branch(&repo, &branch_name, true)?;
         } else {
             debug!("push branch `{}` to remote `{}` (dry run)", branch_name, remote.url);
         }
@@ -233,18 +244,24 @@ pub async fn write_package_release(
 ///
 ///   * Fetching the remote branch, if it exists;
 ///   * Checking if the remote branch's commit message is different;
-///   * Checking if the remote branch's tree is different from the local branch.
+///   * Checking if the remote branch's tree is different from the local tree.
 ///
 /// # Arguments
 ///
 /// * `repo` - The Git repository.
 /// * `branch_name` - The name of the release branch.
 /// * `commit_message` - The commit message for the release branch.
+/// * `tree_id` - The local tree ID, which does not require a local commit.
 ///
 /// # Returns
 ///
 /// A result containing whether the release branch should be pushed to the remote Git repository.
-pub fn should_push_to_remote(repo: &git2::Repository, branch_name: &str, commit_message: &str) -> anyhow::Result<bool> {
+pub fn should_push_to_remote(
+    repo: &git2::Repository,
+    branch_name: &str,
+    commit_message: &str,
+    tree_id: git2::Oid,
+) -> anyhow::Result<bool> {
     // Fetch the remote branch.
     debug!("fetch branch `{branch_name}` from origin remote");
     match fetch_branch(repo, "origin", branch_name)? {
@@ -255,7 +272,7 @@ pub fn should_push_to_remote(repo: &git2::Repository, branch_name: &str, commit_
                 .peel_to_commit()
                 .context("could not peel remote branch to commit")?;
             Ok(remote_commit.message().ok() != Some(commit_message)
-                || !trees_match(repo, &format!("refs/heads/{branch_name}"), &remote_ref)?)
+                || !trees_match(repo, &tree_id.to_string(), &remote_ref)?)
         }
         None => Ok(true),
     }
@@ -630,37 +647,6 @@ mod tests {
 
         // Set up a mock server to simulate the GitHub API.
         let provider = GitHubProvider::default();
-        let server = mock_octocrab(&provider).await;
-        let list_mock = server.mock(|when, then| {
-            let mut body: serde_json::Value =
-                serde_json::from_str(include_str!("../tests/fixtures/github_pulls_list.json")).unwrap();
-            body[0]["title"] = serde_json::Value::String("chore: release v0.3.0".to_string());
-            body[0]["body"] = serde_json::Value::String(
-                indoc! {r#"
-                    ---
-                    packages:
-                    - name: example-rust-workspace
-                      version: 0.3.0
-                    ---
-
-                    ## [0.3.0] - 2026-09-26
-
-                    ### 🚀 Features
-
-                    - *(api)* Add a `subtract` function
-                    - *(cli)* Print subtractions
-                    "#}
-                .to_string(),
-            );
-
-            when.method(GET)
-                .path("/repos/octocat/Hello-World/pulls")
-                .query_param("head", "octocat:reflow--branches--main")
-                .query_param("base", "main");
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(body);
-        });
         config.git.provider = GitProvider::GitHub(provider);
 
         // Commit the current files to the `main` branch.
@@ -706,26 +692,8 @@ mod tests {
             .unwrap();
         assert_eq!(remote_commit.id(), remote_commit_id);
 
-        // Verify that the existing release branch and its pull request remain unchanged.
-        // NB: We expect the exisitng pull request to be fetched, but no creation or patch requests to be made.
-        list_mock.assert_async().await;
-        assert_eq!(
-            prs.unwrap(),
-            vec![PullRequest {
-                number: 1347,
-                url: "https://github.com/octocat/Hello-World/pull/1347".to_string(),
-                title: "chore: release v0.3.0".to_string(),
-                body: Some(build_pull_request_body(&plan).unwrap()),
-                head: "reflow--branches--main".to_string(),
-                base: "main".to_string(),
-                existing: true,
-                packages: vec![PullRequestPackage {
-                    name: "example-rust-workspace".to_string(),
-                    version: Version::parse("0.3.0").unwrap(),
-                    changelog_md: Some(plan[0].changelog_md.clone()),
-                }],
-            }],
-        );
+        // Verify that no pull requests were returned.
+        assert!(prs.unwrap().is_empty());
     }
 
     /// Tests that an empty release plan does not create any pull requests.
@@ -748,12 +716,13 @@ mod tests {
         repo.set_head("refs/heads/main").unwrap();
         let head = commit(&repo, &["."], "chore: initial commit").unwrap();
 
-        // Create a release branch without pushing it to the remote.
+        // Create a local release branch without pushing it to the remote.
         create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
-        commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+        let tree_id = stage(&repo, &["."]).unwrap();
 
         // Verify that the new release branch should be pushed to the remote.
-        assert!(should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0").unwrap());
+        assert!(should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0", tree_id).unwrap());
+        assert_eq!(repo.head().unwrap().target(), Some(head));
     }
 
     /// Tests that the release branch should be pushed to the remote when the commit message has changed.
@@ -774,11 +743,13 @@ mod tests {
         commit(&repo, &["."], "chore: release v0.2.0").unwrap();
         push_branch(&repo, "reflow--branches--main", false).unwrap();
 
-        // Commit a new release message without changing the tree contents.
-        commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+        // Prepare the same tree without committing the new release message.
+        create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
+        let tree_id = stage(&repo, &["."]).unwrap();
 
         // Verify that the release branch should be pushed when the commit message has changed.
-        assert!(should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0").unwrap());
+        assert!(should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0", tree_id).unwrap());
+        assert_eq!(repo.head().unwrap().target(), Some(head));
     }
 
     /// Tests that the release branch should be pushed to the remote when the tree contents have changed.
@@ -799,12 +770,14 @@ mod tests {
         commit(&repo, &["."], "chore: release v0.3.0").unwrap();
         push_branch(&repo, "reflow--branches--main", false).unwrap();
 
-        // Commit changed tree contents without changing the release message.
+        // Stage a new file without creating a local release commit.
+        create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
         project_dir.child("release.txt").write_str("release v0.3.0").unwrap();
-        commit(&repo, &["release.txt"], "chore: release v0.3.0").unwrap();
+        let tree_id = stage(&repo, &["release.txt"]).unwrap();
 
         // Verify that the release branch should be pushed when the tree contents have changed.
-        assert!(should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0").unwrap());
+        assert!(should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0", tree_id).unwrap());
+        assert_eq!(repo.head().unwrap().target(), Some(head));
     }
 
     /// Tests that the release branch should not be pushed to the remote when it is already up-to-date.
@@ -822,15 +795,16 @@ mod tests {
 
         // Create and push a release branch to the remote.
         create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
-        let remote_commit = commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+        commit(&repo, &["."], "chore: release v0.3.0").unwrap();
         push_branch(&repo, "reflow--branches--main", false).unwrap();
 
-        // Create a different commit with the same release message and tree contents.
-        let local_commit = commit(&repo, &["."], "chore: release v0.3.0").unwrap();
-        assert_ne!(local_commit, remote_commit);
+        // Prepare the same tree without creating a local release commit.
+        create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
+        let tree_id = stage(&repo, &["."]).unwrap();
 
         // Verify that the release branch should not be pushed when its message and tree are unchanged.
-        assert!(!should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0").unwrap());
+        assert!(!should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0", tree_id).unwrap());
+        assert_eq!(repo.head().unwrap().target(), Some(head));
     }
 
     /// Tests that the release branch name is built correctly for a combined release.

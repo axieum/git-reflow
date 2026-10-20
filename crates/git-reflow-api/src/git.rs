@@ -166,7 +166,7 @@ pub fn create_or_reset_branch(repo: &Repository, name: &str, commit_id: git2::Oi
     Ok(())
 }
 
-/// Checks if two references point to commits with identical tree content.
+/// Checks if two references point to trees with identical content.
 ///
 /// # Arguments
 ///
@@ -176,49 +176,61 @@ pub fn create_or_reset_branch(repo: &Repository, name: &str, commit_id: git2::Oi
 ///
 /// # Returns
 ///
-/// A result of whether the two references point to commits with identical tree content.
+/// A result of whether the two references point to identical tree content.
 pub fn trees_match(repo: &Repository, source_ref: &str, target_ref: &str) -> anyhow::Result<bool> {
-    // Resolve the source reference to a commit.
-    let source_commit = repo
+    // Resolve the source reference to a tree.
+    let source_tree = repo
         .revparse_single(source_ref)
         .with_context(|| format!("failed to find source reference `{source_ref}`"))?
-        .peel_to_commit()
-        .with_context(|| format!("failed to peel source reference `{source_ref}` to commit"))?;
+        .peel_to_tree()
+        .with_context(|| format!("failed to peel source reference `{source_ref}` to tree"))?;
 
-    // Try to resolve the target reference to a commit.
+    // Try to resolve the target reference to a tree.
     // NB: If the target reference does not exist yet, assume the trees do not match.
-    let target_commit = match repo.revparse_single(target_ref) {
+    let target_tree = match repo.revparse_single(target_ref) {
         Ok(obj) => obj
-            .peel_to_commit()
-            .with_context(|| format!("failed to peel target reference `{target_ref}` to commit"))?,
+            .peel_to_tree()
+            .with_context(|| format!("failed to peel target reference `{target_ref}` to tree"))?,
         Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(false),
         Err(e) => bail!(e),
     };
 
-    // If the commits are identical, then the trees match.
-    if source_commit.id() == target_commit.id() {
-        return Ok(true);
-    }
-
     // If the tree IDs are identical, then the trees match.
-    let source_tree_id = source_commit.tree_id();
-    let target_tree_id = target_commit.tree_id();
-    if source_tree_id == target_tree_id {
+    if source_tree.id() == target_tree.id() {
         return Ok(true);
     }
 
     // Otherwise, we need to check the diff between the two trees.
-    let source_tree = source_commit
-        .tree()
-        .with_context(|| format!("failed to get tree for source commit `{source_ref}`"))?;
-    let target_tree = target_commit
-        .tree()
-        .with_context(|| format!("failed to get tree for target commit `{target_ref}`"))?;
     let mut diff_opts = DiffOptions::new();
     diff_opts.include_untracked(false);
 
     let diff = repo.diff_tree_to_tree(Some(&source_tree), Some(&target_tree), Some(&mut diff_opts))?;
     Ok(diff.deltas().count() == 0)
+}
+
+/// Stages the specified paths and returns the resulting tree ID without creating a commit.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to stage changes in.
+/// * `pathspecs` - A list of file paths/globs to stage.
+///
+/// # Returns
+///
+/// A result containing the Git object ID (OID) of the staged tree.
+pub fn stage<T, I>(repo: &Repository, pathspecs: I) -> anyhow::Result<git2::Oid>
+where
+    T: AsRef<Path>,
+    I: IntoIterator<Item = T>,
+{
+    let pathspecs = paths_relative_to_repo(repo, pathspecs)?;
+    let mut index = repo.index().context("could not acquire index")?;
+    index
+        .add_all(pathspecs, git2::IndexAddOption::DEFAULT, None)
+        .context("could not add changes")?;
+    let tree_oid = index.write_tree().context("could not stage changes")?;
+    index.write().context("could not write Git index")?;
+    Ok(tree_oid)
 }
 
 /// Stages and commits the specified changes in the Git repository.
@@ -238,11 +250,7 @@ where
     I: IntoIterator<Item = T>,
 {
     // Stage the changes in the index.
-    let pathspecs = paths_relative_to_repo(repo, pathspecs)?;
-    let mut index = repo.index().context("could not acquire index")?;
-    index
-        .add_all(pathspecs, git2::IndexAddOption::DEFAULT, None)
-        .context("could not add changes")?;
+    let tree_oid = stage(repo, pathspecs)?;
 
     // Determine the parent commit(s) for the new commit.
     let parent = match repo.head() {
@@ -253,8 +261,6 @@ where
     let parents = parent.iter().collect::<Vec<_>>();
 
     // Commit the changes to the repository and return.
-    let tree_oid = index.write_tree().context("could not stage changes")?;
-    index.write().context("could not write Git index")?;
     let signature = repo.signature()?;
     repo.commit(
         Some("HEAD"),
@@ -833,6 +839,42 @@ mod tests {
         assert_eq!(dirty_files, vec!["tracked.txt".to_string()]);
     }
 
+    /// Tests that selected files are staged into a tree and persisted in the index without creating a commit.
+    #[test]
+    fn test_stage() {
+        // Create a Git repository with an existing tracked file.
+        let (temp_dir, repo) = create_test_repo();
+        temp_dir.child("README.md").write_str("original content").unwrap();
+        let head = commit(&repo, &["README.md"], "docs: add `README.md`").unwrap();
+
+        // Modify the tracked file and create new files, leaving one outside the selected paths.
+        temp_dir.child("README.md").write_str("updated content").unwrap();
+        temp_dir.child("release.txt").write_str("release content").unwrap();
+        temp_dir.child("unrelated.txt").write_str("unrelated content").unwrap();
+
+        // Stage only the release files without creating a commit.
+        let tree_id = stage(&repo, &["README.md", "release.txt"]).unwrap();
+
+        // Verify that the returned tree contains the selected files and their updated contents.
+        let tree = repo.find_tree(tree_id).unwrap();
+        assert_eq!(tree.len(), 2);
+        for (name, content) in [("README.md", "updated content"), ("release.txt", "release content")] {
+            let entry = tree.get_name(name).unwrap();
+            let blob = repo.find_blob(entry.id()).unwrap();
+            assert_eq!(blob.content(), content.as_bytes());
+        }
+        assert!(tree.get_name("unrelated.txt").is_none());
+
+        // Verify that the staged tree was persisted to the index by reopening the repository.
+        let reopened_repo = Repository::open(temp_dir.path()).unwrap();
+        assert_eq!(reopened_repo.index().unwrap().write_tree().unwrap(), tree_id);
+
+        // Verify that staging did not move HEAD or change the committed tree.
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head_commit.id(), head);
+        assert_ne!(head_commit.tree_id(), tree_id);
+    }
+
     /// Tests that files are committed correctly and the new commit exists in the repository.
     #[test]
     fn test_commit() {
@@ -1256,6 +1298,63 @@ mod tests {
         // Verify that the trees match when the target ref does not exist.
         // NB: We assume that a non-existent ref is treated as an empty tree, which when pushed to will match.
         assert!(!trees_match(&repo, &format!("{}", base_commit), "nonexistent-ref").unwrap());
+    }
+
+    /// Tests that newly staged changes match a target commit with identical content.
+    #[test]
+    fn test_trees_match_with_staged_tree() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+        let base = repo.head().unwrap().peel_to_commit().unwrap();
+
+        // Create a target commit, then reset HEAD and the index while preserving files.
+        temp_dir.child("file.txt").write_str("base content").unwrap();
+        let target = commit(&repo, &["file.txt"], "target").unwrap();
+        repo.reset(base.as_object(), git2::ResetType::Mixed, None).unwrap();
+
+        // Stage the same content again, leaving an unrelated file unstaged.
+        temp_dir.child("unrelated.txt").write_str("unrelated").unwrap();
+        let tree_id = stage(&repo, &["file.txt"]).unwrap();
+
+        // Verify that actual changes were staged without moving HEAD and match the target.
+        assert_eq!(
+            repo.status_file(Path::new("file.txt")).unwrap(),
+            git2::Status::INDEX_NEW
+        );
+        assert_eq!(repo.head().unwrap().target(), Some(base.id()));
+        assert!(repo.find_tree(tree_id).unwrap().get_name("unrelated.txt").is_none());
+
+        // Verify that the staged tree matches the target commit - same file contents.
+        assert!(trees_match(&repo, &tree_id.to_string(), &target.to_string()).unwrap());
+    }
+
+    /// Tests that newly staged changes do not match a target commit with different content.
+    #[test]
+    fn test_trees_match_with_staged_tree_not() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+        let base = repo.head().unwrap().peel_to_commit().unwrap();
+
+        // Create a target commit, then reset HEAD and the index while preserving files.
+        temp_dir.child("file.txt").write_str("base content").unwrap();
+        let target = commit(&repo, &["file.txt"], "target").unwrap();
+        repo.reset(base.as_object(), git2::ResetType::Mixed, None).unwrap();
+
+        // Update the file and write an unrelated file.
+        temp_dir.child("file.txt").write_str("updated content").unwrap();
+        temp_dir.child("unrelated.txt").write_str("unrelated").unwrap();
+        let tree_id = stage(&repo, &["file.txt"]).unwrap();
+
+        // Verify that actual changes were staged without moving HEAD and do not match the target.
+        assert_eq!(
+            repo.status_file(Path::new("file.txt")).unwrap(),
+            git2::Status::INDEX_NEW
+        );
+        assert_eq!(repo.head().unwrap().target(), Some(base.id()));
+        assert!(repo.find_tree(tree_id).unwrap().get_name("unrelated.txt").is_none());
+
+        // Verify that the staged tree does not match the target commit - different file contents.
+        assert!(!trees_match(&repo, &tree_id.to_string(), &target.to_string()).unwrap());
     }
 
     /// Tests that a remote URLs are parsed correctly.
