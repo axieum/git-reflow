@@ -197,6 +197,99 @@ fn test_pr_command_creates_separate_pull_requests(
     });
 }
 
+/// Tests that the `pr` command makes no changes or pull requests when the remote is already up-to-date.
+#[rstest]
+fn test_pr_command_noop_when_remote_is_up_to_date(
+    #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+) {
+    // Create a Git repository and add an `origin` remote so that release branches can be pushed to it.
+    let (project_dir, repo) = project_repo;
+    let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+
+    // Set up a mock server to simulate the GitHub API for the initial pull request.
+    let server = MockServer::start();
+    let list_mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octocat/Hello-World/pulls")
+            .query_param("head", "octocat:reflow--branches--main")
+            .query_param("base", "main");
+        then.status(200).header("content-type", "application/json").body("[]");
+    });
+    let create_mock = server.mock(|when, then| {
+        when.method(POST).path("/repos/octocat/Hello-World/pulls");
+        then.status(201)
+            .header("content-type", "application/json")
+            .body(include_str!(
+                "../../git-reflow-api/tests/fixtures/github_pulls_retrieve.json"
+            ));
+    });
+
+    // Configure `git-reflow` by:
+    // - Setting the GitHub host to the mock server's base URL.
+    project_dir
+        .child(".reflow.json")
+        .write_str(&json!({"git": {"provider": {"github": {"host": server.base_url()}}}}).to_string())
+        .unwrap();
+
+    // Commit the current files to the `main` branch.
+    repo.set_head("refs/heads/main").unwrap();
+    git_reflow_api::git::commit(&repo, ["."], "chore: initial commit").unwrap();
+
+    // Create Git tags for the current versions of the packages.
+    let commit = repo.head().unwrap().peel_to_commit().unwrap();
+    for tag in ["v1.0.0", "example-api-v1.0.0", "example-cli-v1.0.0"] {
+        repo.tag_lightweight(tag, commit.as_object(), false).unwrap();
+    }
+
+    // Create some changes in the packages and commit those changes.
+    let lib_rs_path = project_dir.path().join("crates/example-api/src/lib.rs");
+    writeln!(
+        fs::OpenOptions::new().append(true).open(&lib_rs_path).unwrap(),
+        "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
+    )
+    .unwrap();
+    git_reflow_api::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+    let head = repo.head().unwrap().target().unwrap();
+
+    // Run the `pr` command once to publish the release branch and create its pull request.
+    let assert = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .current_dir(&project_dir)
+        .env("GITHUB_TOKEN", "test-token")
+        .arg("pr")
+        .assert()
+        .success();
+    assert!(assert.get_output().stdout.len() > 3, "expected non-empty JSON output");
+    let remote_commit_id = remote_repo.refname_to_id("refs/heads/reflow--branches--main").unwrap();
+    assert_ne!(remote_commit_id, head);
+
+    // Run the `pr` command again and check that its JSON output contains no pull requests.
+    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .current_dir(&project_dir)
+        .env("GITHUB_TOKEN", "test-token")
+        .arg("pr")
+        .assert()
+        .success()
+        .stdout("[]\n");
+
+    // Verify that the original branch, commit and clean working directory were restored.
+    assert_eq!(repo.head().unwrap().shorthand().unwrap(), "main");
+    assert_eq!(repo.head().unwrap().target().unwrap(), head);
+    assert!(repo.statuses(None).unwrap().is_empty(), "uncommitted changes");
+
+    // Verify that the remote release branch is unchanged and no new local release commit was created.
+    assert_eq!(
+        remote_repo.refname_to_id("refs/heads/reflow--branches--main").unwrap(),
+        remote_commit_id,
+    );
+    assert_eq!(repo.refname_to_id("refs/heads/reflow--branches--main").unwrap(), head);
+
+    // Verify that only the initial run made API requests, with no pull request updates on the second run.
+    list_mock.assert_calls(1);
+    create_mock.assert_calls(1);
+}
+
 /// Tests that the `pr` command makes no changes when there are no changes to release.
 #[rstest]
 fn test_pr_command_noop_when_no_changes(#[with("example-rust-workspace")] project_repo: (TempDir, Repository)) {
