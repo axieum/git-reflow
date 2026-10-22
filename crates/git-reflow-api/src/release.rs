@@ -250,7 +250,7 @@ pub fn build_release_title(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::commit;
+    use crate::git::stage_and_commit;
     use crate::provider::{
         GitProvider, PullRequestPackage, build_pull_request_body, github::GitHubProvider, github::tests::mock_octocrab,
     };
@@ -279,7 +279,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        let head = commit(&repo, &["."], "chore: release v1.1.0").unwrap();
+        let head = stage_and_commit(&repo, &["."], "chore: release v1.1.0").unwrap();
 
         // Prepare the package included in the release pull request.
         let pkg = PullRequestPackage {
@@ -411,7 +411,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        let head = commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+        let head = stage_and_commit(&repo, &["."], "chore: release v0.3.0").unwrap();
 
         // Prepare the packages included in the release pull request.
         let packages = vec![
@@ -575,7 +575,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        let head = commit(&repo, &["."], "chore: release v1.1.0").unwrap();
+        let head = stage_and_commit(&repo, &["."], "chore: release v1.1.0").unwrap();
 
         // Prepare the package included in the release pull request.
         let pkg = PullRequestPackage {
@@ -713,7 +713,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        let head = commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+        let head = stage_and_commit(&repo, &["."], "chore: release v0.3.0").unwrap();
 
         // Create and push an existing release tag, then remove the local tag.
         // NB: The package should be skipped based on the remote tag, even when it does not exist locally.
@@ -801,7 +801,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        let head = commit(&repo, &["."], "feat: print subtractions").unwrap();
+        let head = stage_and_commit(&repo, &["."], "feat: print subtractions").unwrap();
 
         // Set up a mock server to simulate the GitHub API.
         let provider = GitHubProvider::default();

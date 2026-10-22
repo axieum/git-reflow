@@ -103,27 +103,31 @@ pub async fn apply_release_plan(
             changed_files.extend(files);
         }
 
+        // Stage the changes.
+        let tree_id = if !dry_run {
+            Some(stage(&repo, &changed_files)?)
+        } else {
+            None
+        };
+
         // Skip the release if the staged tree already matches the remote.
-        if !dry_run {
-            let tree_id = stage(&repo, &changed_files)?;
-            if !should_push_to_remote(&repo, &branch_name, pr_title, tree_id)? {
-                debug!(
-                    "branch `{}` is already up-to-date with remote `{}`",
-                    branch_name, remote.url,
-                );
-                repo.reset(
-                    repo.find_commit(guard.original_commit_id)?.as_object(),
-                    git2::ResetType::Hard,
-                    None,
-                )?;
-                continue;
-            }
+        if !dry_run && !should_push_to_remote(&repo, &branch_name, pr_title, tree_id.unwrap())? {
+            debug!(
+                "branch `{}` is already up-to-date with remote `{}`",
+                branch_name, remote.url,
+            );
+            repo.reset(
+                repo.find_commit(guard.original_commit_id)?.as_object(),
+                git2::ResetType::Hard,
+                None,
+            )?;
+            continue;
         }
 
         // Commit the changes to the branch.
         if !dry_run {
             debug!("commit changes to branch `{}`", branch_name);
-            let commit_id = commit(&repo, &changed_files, pr_title)?;
+            let commit_id = commit(&repo, tree_id.unwrap(), pr_title)?;
             debug!("✅ created commit: {} ({})", &pr_title, commit_id);
         } else {
             debug!("✅ created commit `{}` (dry run)", &pr_title);
@@ -307,6 +311,7 @@ pub fn build_release_branch_name(config: &AppConfig, package_name: &str, base: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::stage_and_commit;
     use crate::provider::{GitProvider, github::GitHubProvider, github::tests::mock_octocrab};
     use assert_fs::{TempDir, prelude::*};
     use git_reflow_fixtures::{add_origin_remote, project_repo};
@@ -349,7 +354,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        commit(&repo, &["."], "chore: initial commit").unwrap();
+        stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
         // Prepare a release plan.
         let plan = vec![
@@ -512,7 +517,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        commit(&repo, &["."], "chore: initial commit").unwrap();
+        stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
         // Prepare a release plan.
         let plan = vec![
@@ -651,7 +656,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        commit(&repo, &["."], "chore: initial commit").unwrap();
+        stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
         // Prepare a release plan.
         let plan = vec![PackageRelease {
@@ -675,7 +680,7 @@ mod tests {
         // Create and push a release branch with the same release message and file contents.
         create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
         let changed_files = write_package_release(&config, &plan[0], false).await.unwrap();
-        let remote_commit_id = commit(&repo, &changed_files, &plan[0].commit_message).unwrap();
+        let remote_commit_id = stage_and_commit(&repo, &changed_files, &plan[0].commit_message).unwrap();
         push_branch(&repo, "reflow--branches--main", false).unwrap();
         create_or_reset_branch(&repo, "main", head).unwrap(); // NB: Switch back to the `main` branch.
 
@@ -714,7 +719,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        let head = commit(&repo, &["."], "chore: initial commit").unwrap();
+        let head = stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
         // Create a local release branch without pushing it to the remote.
         create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
@@ -736,11 +741,11 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        let head = commit(&repo, &["."], "chore: initial commit").unwrap();
+        let head = stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
         // Create and push a release branch to the remote.
         create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
-        commit(&repo, &["."], "chore: release v0.2.0").unwrap();
+        stage_and_commit(&repo, &["."], "chore: release v0.2.0").unwrap();
         push_branch(&repo, "reflow--branches--main", false).unwrap();
 
         // Prepare the same tree without committing the new release message.
@@ -763,11 +768,11 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        let head = commit(&repo, &["."], "chore: initial commit").unwrap();
+        let head = stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
         // Create and push a release branch to the remote.
         create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
-        commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+        stage_and_commit(&repo, &["."], "chore: release v0.3.0").unwrap();
         push_branch(&repo, "reflow--branches--main", false).unwrap();
 
         // Stage a new file without creating a local release commit.
@@ -791,11 +796,11 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        let head = commit(&repo, &["."], "chore: initial commit").unwrap();
+        let head = stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
         // Create and push a release branch to the remote.
         create_or_reset_branch(&repo, "reflow--branches--main", head).unwrap();
-        commit(&repo, &["."], "chore: release v0.3.0").unwrap();
+        stage_and_commit(&repo, &["."], "chore: release v0.3.0").unwrap();
         push_branch(&repo, "reflow--branches--main", false).unwrap();
 
         // Prepare the same tree without creating a local release commit.

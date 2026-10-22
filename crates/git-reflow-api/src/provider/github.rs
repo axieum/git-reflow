@@ -1,6 +1,9 @@
+use crate::git::{FileChange, collect_staged_changes};
 use crate::provider::{BaseGitProvider, PullRequest};
 use anyhow::Context;
 use async_trait::async_trait;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use octocrab::Octocrab;
 use octocrab::commits::PullRequestTarget;
 use octocrab::params::State;
@@ -19,6 +22,11 @@ pub struct GitHubProvider {
     /// **Default:** github.com
     #[serde(default = "default_host")]
     host: String,
+    /// Whether to commit changes via the GitHub API instead of using the local Git client.
+    ///
+    /// **Default:** `true`
+    #[serde(default = "default_commit_via_api")]
+    commit_via_api: bool,
     /// The [`Octocrab`] client used to interact with the GitHub API.
     ///
     /// **See Also:** [`GitHubProvider::client`]
@@ -31,10 +39,16 @@ fn default_host() -> String {
     String::from("github.com")
 }
 
+/// Returns the default value for `$.commit_via_api`.
+fn default_commit_via_api() -> bool {
+    true
+}
+
 impl Default for GitHubProvider {
     fn default() -> Self {
         Self {
             host: default_host(),
+            commit_via_api: default_commit_via_api(),
             client: OnceLock::new(),
         }
     }
@@ -69,6 +83,166 @@ impl GitHubProvider {
         // Build the Octocrab client once and return it.
         let client = builder.build().context("failed to build octocrab client")?;
         Ok(self.client.get_or_init(|| client))
+    }
+
+    /// Creates a commit via GitHub on the given branch with the specified commit message and file changes.
+    ///
+    /// [https://docs.github.com/en/graphql/reference/commits#mutation-createcommitonbranch](https://docs.github.com/en/graphql/reference/commits#mutation-createcommitonbranch)
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner of the GitHub repository (user or organization).
+    /// * `repo_name` - The name of the GitHub repository.
+    /// * `repo` - The local Git repository.
+    /// * `branch_name` - The name of the branch to commit to.
+    /// * `headline` - The commit message headline.
+    /// * `body` - An optional commit message body.
+    /// * `tree_id` - The staged tree ID returned by [`crate::git::stage`].
+    ///
+    /// # Returns
+    ///
+    /// A result containing the Git object ID (OID) of the new commit.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn commit(
+        &self,
+        owner: &str,
+        repo_name: &str,
+        repo: &git2::Repository,
+        branch_name: &str,
+        tree_id: git2::Oid,
+        headline: &str,
+        body: Option<&str>,
+    ) -> anyhow::Result<git2::Oid> {
+        #[derive(Debug, serde::Serialize)]
+        struct CreateCommitOnBranchMutation {
+            query: &'static str,
+            variables: CommitVariables,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        struct CommitVariables {
+            input: CreateCommitOnBranchInput,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CreateCommitOnBranchInput {
+            branch: CommittableBranch,
+            expected_head_oid: String,
+            message: CommitMessage,
+            file_changes: FileChanges,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CommittableBranch {
+            repository_name_with_owner: String,
+            branch_name: String,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        struct CommitMessage {
+            headline: String,
+            body: Option<String>,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        struct FileChanges {
+            additions: Vec<FileAddition>,
+            deletions: Vec<FileDeletion>,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        struct FileAddition {
+            path: String,
+            contents: String,
+        }
+
+        #[derive(Debug, serde::Serialize)]
+        struct FileDeletion {
+            path: String,
+        }
+
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CreateCommitOnBranchResponse {
+            create_commit_on_branch: CreateCommitOnBranchPayload,
+        }
+
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CreateCommitOnBranchPayload {
+            commit: Commit,
+        }
+
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Commit {
+            oid: String,
+        }
+
+        let client = self.client()?;
+
+        // Find the expected head OID of the branch.
+        let expected_head_oid = repo
+            .find_reference(&format!("refs/heads/{branch_name}"))
+            .context("failed to find branch reference")?
+            .target()
+            .context("failed to get branch target OID")?;
+
+        // Prepare the file changes for the commit.
+        let changes = collect_staged_changes(repo, expected_head_oid, tree_id)?;
+        let mut additions = Vec::new();
+        let mut deletions = Vec::new();
+        for change in changes {
+            match change {
+                FileChange::Create { path, contents } | FileChange::Update { path, contents } => {
+                    additions.push(FileAddition {
+                        path,
+                        contents: STANDARD.encode(contents),
+                    });
+                }
+                FileChange::Delete { path } => {
+                    deletions.push(FileDeletion { path });
+                }
+            }
+        }
+        trace!(
+            owner, repo_name, branch_name,
+            expected_head_oid = %expected_head_oid,
+            additions = additions.len(),
+            deletions = deletions.len(),
+            "execute GraphQL mutation `createCommitOnBranch`"
+        );
+
+        // Construct the GraphQL mutation payload.
+        let payload = CreateCommitOnBranchMutation {
+            query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+            variables: CommitVariables {
+                input: CreateCommitOnBranchInput {
+                    branch: CommittableBranch {
+                        repository_name_with_owner: format!("{owner}/{repo_name}"),
+                        branch_name: branch_name.to_string(),
+                    },
+                    expected_head_oid: expected_head_oid.to_string(),
+                    file_changes: FileChanges { additions, deletions },
+                    message: CommitMessage {
+                        headline: headline.to_string(),
+                        body: body.map(|s| s.to_string()),
+                    },
+                },
+            },
+        };
+
+        // Execute the GraphQL mutation to create the commit on the branch.
+        let response: CreateCommitOnBranchResponse = client
+            .graphql(&payload)
+            .await
+            .with_context(|| format!("failed to create commit via GitHub on `{owner}/{repo_name}:{branch_name}`"))?;
+
+        // Return the OID of the newly created commit.
+        git2::Oid::from_str(&response.create_commit_on_branch.commit.oid)
+            .context("GitHub returned an invalid commit OID")
     }
 }
 
@@ -238,10 +412,15 @@ impl BaseGitProvider for GitHubProvider {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
+    use crate::git::stage_and_commit;
+    use assert_fs::{TempDir, prelude::*};
+    use git2::Repository;
     use httpmock::prelude::*;
     use rstest::{fixture, rstest};
+    use serde_json::json;
+    use std::path::Path;
 
     /// A test fixture for a default GitHub provider.
     #[fixture]
@@ -593,5 +772,152 @@ pub(crate) mod tests {
             release.unwrap(),
             "https://github.com/octocat/Hello-World/releases/v1.0.0"
         );
+    }
+
+    /// Tests that a commit is created on GitHub against the given branch name.
+    #[rstest]
+    #[tokio::test]
+    async fn test_commit(provider: GitHubProvider) {
+        // Initialise a new Git repository.
+        let temp_dir = TempDir::new().unwrap();
+        let repo = Repository::init(&temp_dir).unwrap();
+
+        // Configure the Git author.
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@localhost").unwrap();
+
+        // Create some files in the repository and commit them.
+        for name in ["old.txt", "deleted.txt", "modified.txt", "skipped.txt"] {
+            temp_dir.child(name).write_str("original").unwrap();
+        }
+        stage_and_commit(&repo, ["."], "initial").unwrap();
+        let head_oid = repo.head().unwrap().target().unwrap();
+        let branch_name = repo.head().unwrap().shorthand().unwrap().to_string();
+
+        // Modify the files to simulate additions, deletions, and renames.
+        temp_dir.child("modified.txt").write_str("updated").unwrap();
+        temp_dir.child("skipped.txt").write_str("not included").unwrap();
+        temp_dir.child("assets").create_dir_all().unwrap();
+        temp_dir
+            .child("assets")
+            .child("image.bin")
+            .write_binary(&[0, 255, 10])
+            .unwrap();
+        std::fs::remove_file(temp_dir.child("deleted.txt")).unwrap();
+        std::fs::rename(temp_dir.child("old.txt"), temp_dir.child("renamed.txt")).unwrap();
+
+        // Stage the selected files and then make another edit that must not be uploaded.
+        let pathspecs = ["old.txt", "renamed.txt", "deleted.txt", "modified.txt", "assets/*"];
+        let tree_id = crate::git::stage(&repo, pathspecs).unwrap();
+        temp_dir.child("modified.txt").write_str("not staged").unwrap();
+
+        // Set up a mock server to simulate the GitHub API.
+        let server = mock_octocrab(&provider).await;
+        let graphql_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/graphql")
+                .json_body(json!({
+                    "query": "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+                    "variables": {
+                        "input": {
+                            "branch": {
+                                "repositoryNameWithOwner": "octocat/Hello-World",
+                                "branchName": branch_name,
+                            },
+                            "expectedHeadOid": head_oid.to_string(),
+                            "message": {
+                                "headline": "feat",
+                                "body": null
+                            },
+                            "fileChanges": {
+                                "additions": [
+                                    { "path": "assets/image.bin", "contents": "AP8K" },
+                                    { "path": "modified.txt", "contents": "dXBkYXRlZA==" },
+                                    { "path": "renamed.txt", "contents": "b3JpZ2luYWw=" }
+                                ],
+                                "deletions": [
+                                    { "path": "deleted.txt" },
+                                    { "path": "old.txt" }
+                                ]
+                            }
+                        }
+                    }
+                }));
+            then.status(200).header("content-type", "application/json").body(
+                r#"{"data":{"createCommitOnBranch":{"commit":{"oid":"0123456789abcdef0123456789abcdef01234567"}}}}"#,
+            );
+        });
+
+        // Create a commit from the captured staged tree on the branch.
+        let oid = provider
+            .commit("octocat", "Hello-World", &repo, &branch_name, tree_id, "feat", None)
+            .await;
+
+        // Ensure the commit was created successfully.
+        graphql_mock.assert_async().await;
+        assert_eq!(
+            oid.unwrap(),
+            git2::Oid::from_str("0123456789abcdef0123456789abcdef01234567").unwrap(),
+        );
+
+        // Verify that the local branch, index, and working-directory contents are unchanged.
+        assert_eq!(repo.head().unwrap().target().unwrap(), head_oid);
+        assert_eq!(repo.index().unwrap().write_tree().unwrap(), tree_id);
+        assert_eq!(
+            repo.index().unwrap().get_path(Path::new("renamed.txt"), 0).unwrap().id,
+            git2::Oid::hash_object(git2::ObjectType::Blob, b"original").unwrap(),
+        );
+        assert_eq!(std::fs::read(temp_dir.child("modified.txt")).unwrap(), b"not staged");
+    }
+
+    /// Tests that GraphQL errors and invalid commit OIDs are returned with operation context.
+    #[rstest]
+    #[case::graphql_error(
+        r#"{"errors":[{"message":"expected head does not match"}]}"#,
+        "failed to create commit via GitHub"
+    )]
+    #[case::invalid_oid(
+        r#"{"data":{"createCommitOnBranch":{"commit":{"oid":"invalid"}}}}"#,
+        "GitHub returned an invalid commit OID"
+    )]
+    #[tokio::test]
+    async fn test_commit_with_errors(provider: GitHubProvider, #[case] response: &str, #[case] expected_error: &str) {
+        // Initialise a new Git repository.
+        let temp_dir = TempDir::new().unwrap();
+        let repo = Repository::init(&temp_dir).unwrap();
+
+        // Configure the Git author.
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@localhost").unwrap();
+
+        // Commit a file and modify its working-directory contents.
+        temp_dir.child("file.txt").write_str("original").unwrap();
+        stage_and_commit(&repo, ["."], "initial").unwrap();
+        let branch = repo.head().unwrap().shorthand().unwrap().to_string();
+        temp_dir.child("file.txt").write_str("updated").unwrap();
+
+        // Stage the updated file for the API commit.
+        let tree_id = crate::git::stage(&repo, ["file.txt"]).unwrap();
+
+        // Mock a GraphQL error or an invalid commit OID.
+        let server = mock_octocrab(&provider).await;
+        let graphql_mock = server.mock(|when, then| {
+            when.method(POST).path("/graphql");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(response);
+        });
+
+        // Attempt to create a commit using the mocked response.
+        let result = provider
+            .commit("octocat", "Hello-World", &repo, &branch, tree_id, "headline", None)
+            .await;
+
+        // Verify that the request was submitted and the error includes operation context.
+        graphql_mock.assert_async().await;
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains(expected_error), "{error:#}");
     }
 }

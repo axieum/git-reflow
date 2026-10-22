@@ -1,5 +1,5 @@
 use anyhow::{Context, anyhow, bail, ensure};
-use git2::{DiffOptions, Repository, StatusOptions};
+use git2::{Delta, DiffOptions, Repository, StatusOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tracing::{debug, error, trace, warn};
@@ -46,6 +46,72 @@ pub fn get_dirty_files(repo: &Repository) -> anyhow::Result<Vec<String>> {
         .iter()
         .filter_map(|entry| entry.path().map(|status| status.to_string()).ok())
         .collect::<Vec<_>>())
+}
+
+/// A change to a file, with raw file contents.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FileChange {
+    /// Creates a file that does not exist in the base commit.
+    Create { path: String, contents: Vec<u8> },
+    /// Replaces the contents of a file in the base commit.
+    Update { path: String, contents: Vec<u8> },
+    /// Deletes a file from the base commit.
+    Delete { path: String },
+}
+
+/// Collects changes from a staged tree relative to a base commit.
+///
+/// It reads file contents from Git blobs without accessing the working directory or
+/// modifying the index. Renames are represented as a deletion followed by a creation.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to check.
+/// * `base` - The commit against which changes are calculated.
+/// * `tree_id` - The staged tree ID returned by [`stage`].
+///
+/// # Returns
+///
+/// A result containing creations, updates, and deletions relative to `base`.
+pub fn collect_staged_changes(
+    repo: &Repository,
+    base: git2::Oid,
+    tree_id: git2::Oid,
+) -> anyhow::Result<Vec<FileChange>> {
+    let base_tree = repo
+        .find_commit(base)
+        .context("failed to find base commit")?
+        .tree()
+        .context("failed to read base tree")?;
+    let tree = repo.find_tree(tree_id).context("failed to find staged tree")?;
+    let diff = repo
+        .diff_tree_to_tree(Some(&base_tree), Some(&tree), None)
+        .context("failed to compare base commit with staged tree")?;
+    let mut changes = Vec::new();
+    for delta in diff.deltas() {
+        let old = delta.old_file();
+        let new = delta.new_file();
+        let path = new.path().or_else(|| old.path()).context("changed file has no path")?;
+        let path = path
+            .to_str()
+            .context("changed file path is not valid UTF-8")?
+            .to_string();
+        if delta.status() == Delta::Deleted {
+            changes.push(FileChange::Delete { path });
+            continue;
+        }
+        let contents = repo
+            .find_blob(new.id())
+            .with_context(|| format!("failed to read staged blob for `{path}`"))?
+            .content()
+            .to_vec();
+        changes.push(if delta.status() == Delta::Added {
+            FileChange::Create { path, contents }
+        } else {
+            FileChange::Update { path, contents }
+        });
+    }
+    Ok(changes)
 }
 
 /// Sanitises a valid Git branch name by:
@@ -233,25 +299,21 @@ where
     Ok(tree_oid)
 }
 
-/// Stages and commits the specified changes in the Git repository.
+/// Commits a previously staged tree in the Git repository.
+///
+/// Does not stage files or modify the index. The consumer must call [`stage`]
+/// first and pass the returned tree ID.
 ///
 /// # Arguments
 ///
 /// * `repo` - The Git repository to commit changes in.
-/// * `pathspecs` - A list of file paths/globs to stage and commit.
+/// * `tree_oid` - The staged tree ID returned by [`stage`].
 /// * `message` - The commit message to use for the new commit.
 ///
 /// # Returns
 ///
 /// A result containing the Git object ID (OID) of the new commit.
-pub fn commit<T, I>(repo: &Repository, pathspecs: I, message: &str) -> anyhow::Result<git2::Oid>
-where
-    T: AsRef<Path>,
-    I: IntoIterator<Item = T>,
-{
-    // Stage the changes in the index.
-    let tree_oid = stage(repo, pathspecs)?;
-
+pub fn commit(repo: &Repository, tree_oid: git2::Oid, message: &str) -> anyhow::Result<git2::Oid> {
     // Determine the parent commit(s) for the new commit.
     let parent = match repo.head() {
         Ok(head) => Some(head.peel_to_commit().context("failed to peel HEAD to commit")?),
@@ -271,6 +333,41 @@ where
         &parents,
     )
     .context("could not commit changes")
+}
+
+/// Both stages and commits the specified paths with the given commit message.
+///
+/// This is equivalent to:
+///
+/// ```no_run
+/// use git_reflow_api::git::{commit, stage};
+/// use git2::Repository;
+///
+/// fn example() -> anyhow::Result<()> {
+///     let repo = Repository::open(".")?;
+///     let tree_id = stage(&repo, ["README.md"])?;
+///     let commit_id = commit(&repo, tree_id, "docs(README): add example code")?;
+///     println!("created commit: {commit_id}");
+///     Ok(())
+/// }
+/// ```
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to commit changes in.
+/// * `pathspecs` - A list of file paths/globs to stage.
+/// * `message` - The commit message to use for the new commit.
+///
+/// # Returns
+///
+/// A result containing the Git object ID (OID) of the new commit.
+pub fn stage_and_commit<T, I>(repo: &Repository, pathspecs: I, message: &str) -> anyhow::Result<git2::Oid>
+where
+    T: AsRef<Path>,
+    I: IntoIterator<Item = T>,
+{
+    let tree_id = stage(repo, pathspecs)?;
+    commit(repo, tree_id, message)
 }
 
 /// Creates a tag at the given commit.
@@ -771,9 +868,9 @@ mod tests {
 
         // Commit tracked files.
         temp_dir.child("clean.txt").write_str("clean content").unwrap();
-        commit(&repo, &["clean.txt"], "feat: add clean.txt").unwrap();
+        stage_and_commit(&repo, &["clean.txt"], "feat: add clean.txt").unwrap();
         temp_dir.child("tracked.txt").write_str("initial content").unwrap();
-        commit(&repo, &["tracked.txt"], "feat: add tracked.txt").unwrap();
+        stage_and_commit(&repo, &["tracked.txt"], "feat: add tracked.txt").unwrap();
 
         // Verify that a clean working directory passes.
         let result = ensure_clean_working_directory(&repo);
@@ -788,13 +885,13 @@ mod tests {
 
         // Add a `.gitignore` file.
         temp_dir.child(".gitignore").write_str("ignored.txt\n").unwrap();
-        commit(&repo, &[".gitignore"], "chore: add gitignore").unwrap();
+        stage_and_commit(&repo, &[".gitignore"], "chore: add gitignore").unwrap();
 
         // Commit tracked files.
         temp_dir.child("clean.txt").write_str("clean content").unwrap();
-        commit(&repo, &["clean.txt"], "feat: add clean.txt").unwrap();
+        stage_and_commit(&repo, &["clean.txt"], "feat: add clean.txt").unwrap();
         temp_dir.child("tracked.txt").write_str("initial content").unwrap();
-        commit(&repo, &["tracked.txt"], "feat: add tracked.txt").unwrap();
+        stage_and_commit(&repo, &["tracked.txt"], "feat: add tracked.txt").unwrap();
 
         // Write some changes to the filesystem.
         temp_dir.child("tracked.txt").write_str("updated content").unwrap();
@@ -818,13 +915,13 @@ mod tests {
 
         // Add a `.gitignore` file.
         temp_dir.child(".gitignore").write_str("ignored.txt\n").unwrap();
-        commit(&repo, &[".gitignore"], "chore: add gitignore").unwrap();
+        stage_and_commit(&repo, &[".gitignore"], "chore: add gitignore").unwrap();
 
         // Commit tracked files.
         temp_dir.child("clean.txt").write_str("clean content").unwrap();
-        commit(&repo, &["clean.txt"], "feat: add clean.txt").unwrap();
+        stage_and_commit(&repo, &["clean.txt"], "feat: add clean.txt").unwrap();
         temp_dir.child("tracked.txt").write_str("initial content").unwrap();
-        commit(&repo, &["tracked.txt"], "feat: add tracked.txt").unwrap();
+        stage_and_commit(&repo, &["tracked.txt"], "feat: add tracked.txt").unwrap();
 
         // Write some changes to the filesystem.
         temp_dir.child("tracked.txt").write_str("updated content").unwrap();
@@ -839,13 +936,145 @@ mod tests {
         assert_eq!(dirty_files, vec!["tracked.txt".to_string()]);
     }
 
+    /// Tests that collecting staged changes include creations, updates and deletions with file contents.
+    #[test]
+    fn test_collect_staged_changes() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+
+        // Create some files in the repository and commit them.
+        for name in ["old.txt", "deleted.txt", "modified.txt", "skipped.txt"] {
+            temp_dir.child(name).write_str("original").unwrap();
+        }
+        let base = stage_and_commit(&repo, ["."], "initial").unwrap();
+
+        // Modify the files to simulate additions, deletions, and renames.
+        temp_dir.child("modified.txt").write_str("updated").unwrap();
+        temp_dir.child("skipped.txt").write_str("not included").unwrap();
+        temp_dir.child("assets").create_dir_all().unwrap();
+        temp_dir
+            .child("assets")
+            .child("image.bin")
+            .write_binary(&[0, 255, 10])
+            .unwrap();
+        std::fs::remove_file(temp_dir.child("deleted.txt")).unwrap();
+        std::fs::rename(temp_dir.child("old.txt"), temp_dir.child("renamed.txt")).unwrap();
+
+        // Stage only the selected files.
+        let pathspecs = ["old.txt", "renamed.txt", "deleted.txt", "modified.txt", "assets/*"];
+        let tree_id = stage(&repo, pathspecs).unwrap();
+
+        // Change both the working directory and index after staging above.
+        temp_dir
+            .child("modified.txt")
+            .write_str("later staged contents")
+            .unwrap();
+        let later_tree_id = stage(&repo, ["modified.txt"]).unwrap();
+        std::fs::remove_file(temp_dir.child("modified.txt")).unwrap();
+        std::fs::remove_file(temp_dir.child("renamed.txt")).unwrap();
+
+        // Collect changes from the earlier staged tree rather than the current index or working directory.
+        let changes = collect_staged_changes(&repo, base, tree_id).unwrap();
+
+        // Verify that renames are represented as a deletion and creation with the file contents.
+        assert_eq!(
+            changes,
+            vec![
+                FileChange::Create {
+                    path: "assets/image.bin".into(),
+                    contents: vec![0, 255, 10],
+                },
+                FileChange::Delete {
+                    path: "deleted.txt".into(),
+                },
+                FileChange::Update {
+                    path: "modified.txt".into(),
+                    contents: b"updated".to_vec(),
+                },
+                FileChange::Delete { path: "old.txt".into() },
+                FileChange::Create {
+                    path: "renamed.txt".into(),
+                    contents: b"original".to_vec(),
+                },
+            ],
+        );
+
+        // Verify that collecting changes left the HEAD and the later staged tree unchanged.
+        assert_eq!(repo.head().unwrap().target().unwrap(), base);
+        assert_eq!(repo.index().unwrap().write_tree().unwrap(), later_tree_id);
+    }
+
+    /// Tests that collecting staged changes can be relative to an explicit base rather than HEAD.
+    #[test]
+    fn test_collect_staged_changes_with_explicit_base() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+        let base = repo.head().unwrap().target().unwrap();
+
+        // Commit a new file so that HEAD differs from the base.
+        temp_dir.child("file.txt").write_str("committed after base").unwrap();
+        let tree_id = stage(&repo, ["file.txt"]).unwrap();
+        commit(&repo, tree_id, "new HEAD").unwrap();
+
+        // Collect changes relative to the earlier base, not the current HEAD.
+        let changes = collect_staged_changes(&repo, base, tree_id).unwrap();
+
+        // Verify that the committed file is still reported as a creation relative to the base.
+        assert_eq!(
+            changes,
+            vec![FileChange::Create {
+                path: "file.txt".into(),
+                contents: b"committed after base".to_vec(),
+            }],
+        );
+
+        // Verify that comparing the staged tree with its own commit produces no changes.
+        let head = repo.head().unwrap().target().unwrap();
+        let changes = collect_staged_changes(&repo, head, tree_id).unwrap();
+        assert!(changes.is_empty());
+    }
+
+    /// Tests that collected staged contents include Git line-ending normalisation.
+    #[test]
+    fn test_collect_staged_changes_normalizes_contents() {
+        // Create a Git repository.
+        let (temp_dir, repo) = create_test_repo();
+        let base = repo.head().unwrap().target().unwrap();
+
+        // Configure text normalisation and stage a file with CRLF line endings.
+        temp_dir
+            .child(".gitattributes")
+            .write_str("file.txt text eol=lf\n")
+            .unwrap();
+        temp_dir.child("file.txt").write_binary(b"staged\r\n").unwrap();
+        let tree_id = stage(&repo, [".gitattributes", "file.txt"]).unwrap();
+
+        // Collect the staged changes relative to the initial commit.
+        let changes = collect_staged_changes(&repo, base, tree_id).unwrap();
+
+        // Verify that contents match Git's normalised line endings rather than the working-directory contents.
+        assert_eq!(
+            changes,
+            vec![
+                FileChange::Create {
+                    path: ".gitattributes".into(),
+                    contents: b"file.txt text eol=lf\n".to_vec(),
+                },
+                FileChange::Create {
+                    path: "file.txt".into(),
+                    contents: b"staged\n".to_vec(),
+                },
+            ]
+        );
+    }
+
     /// Tests that selected files are staged into a tree and persisted in the index without creating a commit.
     #[test]
     fn test_stage() {
         // Create a Git repository with an existing tracked file.
         let (temp_dir, repo) = create_test_repo();
         temp_dir.child("README.md").write_str("original content").unwrap();
-        let head = commit(&repo, &["README.md"], "docs: add `README.md`").unwrap();
+        let head = stage_and_commit(&repo, &["README.md"], "docs: add `README.md`").unwrap();
 
         // Modify the tracked file and create new files, leaving one outside the selected paths.
         temp_dir.child("README.md").write_str("updated content").unwrap();
@@ -883,12 +1112,22 @@ mod tests {
 
         // Create a new file and commit it.
         temp_dir.child("README.md").write_str("lorem ipsum").unwrap();
-        let commit_id = commit(&repo, &["README.md"], "docs: add `README.md`").unwrap();
+        let tree_id = stage(&repo, &["README.md"]).unwrap();
 
-        // Verify that the commit was created and the file is tracked.
+        // Stage different contents and then remove the working-directory file.
+        temp_dir.child("README.md").write_str("later contents").unwrap();
+        let later_tree_id = stage(&repo, ["README.md"]).unwrap();
+        std::fs::remove_file(temp_dir.child("README.md")).unwrap();
+
+        // Commit the staged tree without reading or modifying the later index.
+        let commit_id = commit(&repo, tree_id, "docs: add `README.md`").unwrap();
+
+        // Verify that the commit uses the staged tree and leaves the later index unchanged.
         let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
         assert_eq!(head_commit.id(), commit_id);
-        assert!(repo.find_commit(commit_id).is_ok());
+        assert_eq!(head_commit.tree_id(), tree_id);
+        assert_eq!(repo.index().unwrap().write_tree().unwrap(), later_tree_id);
+        assert!(!temp_dir.child("README.md").path().exists());
     }
 
     /// Tests that a tag is created correctly and points to the expected commit.
@@ -899,7 +1138,7 @@ mod tests {
 
         // Create a new file and commit it.
         temp_dir.child("README.md").write_str("lorem ipsum").unwrap();
-        let commit_id = commit(&repo, &["README.md"], "docs: add `README.md`").unwrap();
+        let commit_id = stage_and_commit(&repo, &["README.md"], "docs: add `README.md`").unwrap();
 
         // Create a tag for the commit.
         tag(&repo, "v1.0.0", commit_id, false).unwrap();
@@ -917,14 +1156,14 @@ mod tests {
 
         // Create a new file and commit it.
         temp_dir.child("README.md").write_str("lorem ipsum").unwrap();
-        let commit_id = commit(&repo, &["README.md"], "docs: add `README.md`").unwrap();
+        let commit_id = stage_and_commit(&repo, &["README.md"], "docs: add `README.md`").unwrap();
 
         // Create a tag for the commit.
         tag(&repo, "v1.0.0", commit_id, false).unwrap();
 
         // Create a new commit and force overwrite the tag to point to the new commit.
         temp_dir.child("README.md").write_str("dolor sit amet").unwrap();
-        let new_commit_id = commit(&repo, &["README.md"], "docs: update `README.md`").unwrap();
+        let new_commit_id = stage_and_commit(&repo, &["README.md"], "docs: update `README.md`").unwrap();
 
         // Ensure that only a force tag succeeds.
         assert!(tag(&repo, "v1.0.0", new_commit_id, false).is_err());
@@ -1071,13 +1310,13 @@ mod tests {
         create_or_reset_branch(&repo, "feature", base).unwrap();
         push_branch(&repo, "feature", false).unwrap();
         temp_dir.child("tracked.txt").write_str("remote version").unwrap();
-        commit(&repo, &["tracked.txt"], "remote version").unwrap();
+        stage_and_commit(&repo, &["tracked.txt"], "remote version").unwrap();
         push_branch(&repo, "feature", false).unwrap();
 
         // Rewrite the local branch.
         create_or_reset_branch(&repo, "feature", base).unwrap();
         temp_dir.child("tracked.txt").write_str("local version").unwrap();
-        let local_version = commit(&repo, &["tracked.txt"], "local version").unwrap();
+        let local_version = stage_and_commit(&repo, &["tracked.txt"], "local version").unwrap();
 
         // Ensure that only a force push succeeds.
         assert!(push_branch(&repo, "feature", false).is_err());
@@ -1130,15 +1369,15 @@ mod tests {
         tag(&repo, "v1.2.3", base, false).unwrap();
         push_tag(&repo, "v1.2.3", false).unwrap();
         temp_dir.child("tracked.txt").write_str("remote version").unwrap();
-        let remote_version = commit(&repo, &["tracked.txt"], "remote version").unwrap();
-        tag(&repo, "v1.2.3", remote_version, true).unwrap();
+        let remote_commit = stage_and_commit(&repo, &["tracked.txt"], "remote version").unwrap();
+        tag(&repo, "v1.2.3", remote_commit, true).unwrap();
         push_tag(&repo, "v1.2.3", true).unwrap();
 
         // Rewrite the local tag.
         repo.tag_delete("v1.2.3").unwrap();
         temp_dir.child("tracked.txt").write_str("local version").unwrap();
-        let local_version = commit(&repo, &["tracked.txt"], "local version").unwrap();
-        tag(&repo, "v1.2.3", local_version, true).unwrap();
+        let local_commit = stage_and_commit(&repo, &["tracked.txt"], "local version").unwrap();
+        tag(&repo, "v1.2.3", local_commit, true).unwrap();
 
         // Ensure that only a force push succeeds.
         assert!(push_tag(&repo, "v1.2.3", false).is_err());
@@ -1152,7 +1391,7 @@ mod tests {
                 .peel_to_commit()
                 .unwrap()
                 .id(),
-            local_version,
+            local_commit,
         );
     }
 
@@ -1165,9 +1404,9 @@ mod tests {
         // Create a base and latest commit.
         // NB: We'll create a new branch at the base commit, so the later commit shouldn't exist on the new branch.
         temp_dir.child("tracked.txt").write_str("base").unwrap();
-        let base_commit = commit(&repo, &["tracked.txt"], "base").unwrap();
+        let base_commit = stage_and_commit(&repo, &["tracked.txt"], "base").unwrap();
         temp_dir.child("tracked.txt").write_str("latest").unwrap();
-        commit(&repo, &["tracked.txt"], "latest").unwrap();
+        stage_and_commit(&repo, &["tracked.txt"], "latest").unwrap();
 
         // Create a new branch at the base commit.
         create_or_reset_branch(&repo, "feature", base_commit).unwrap();
@@ -1191,9 +1430,9 @@ mod tests {
         // Create a base and latest commit.
         // NB: We'll create a new branch at the latest commit, but not check it out yet.
         temp_dir.child("tracked.txt").write_str("base").unwrap();
-        let base_commit = commit(&repo, &["tracked.txt"], "base").unwrap();
+        let base_commit = stage_and_commit(&repo, &["tracked.txt"], "base").unwrap();
         temp_dir.child("tracked.txt").write_str("latest").unwrap();
-        let latest_commit = commit(&repo, &["tracked.txt"], "latest").unwrap();
+        let latest_commit = stage_and_commit(&repo, &["tracked.txt"], "latest").unwrap();
         repo.branch("feature", &repo.find_commit(latest_commit).unwrap(), false)
             .unwrap();
 
@@ -1219,9 +1458,9 @@ mod tests {
         // Create a base and latest commit.
         // NB: We'll create a new branch at the latest commit, and switch to it.
         temp_dir.child("tracked.txt").write_str("base").unwrap();
-        let base_commit = commit(&repo, &["tracked.txt"], "base").unwrap();
+        let base_commit = stage_and_commit(&repo, &["tracked.txt"], "base").unwrap();
         temp_dir.child("tracked.txt").write_str("latest").unwrap();
-        let latest_commit = commit(&repo, &["tracked.txt"], "latest").unwrap();
+        let latest_commit = stage_and_commit(&repo, &["tracked.txt"], "latest").unwrap();
         create_or_reset_branch(&repo, "feature", latest_commit).unwrap();
         assert_eq!(repo.head().unwrap().target(), Some(latest_commit));
 
@@ -1246,11 +1485,11 @@ mod tests {
 
         // Create a base commit with a file.
         temp_dir.child("file.txt").write_str("base content").unwrap();
-        let base_commit = commit(&repo, &["file.txt"], "base").unwrap();
+        let base_commit = stage_and_commit(&repo, &["file.txt"], "base").unwrap();
 
         // Create a second commit with the same file content.
         temp_dir.child("file.txt").write_str("base content").unwrap();
-        let same_commit = commit(&repo, &["file.txt"], "same").unwrap();
+        let same_commit = stage_and_commit(&repo, &["file.txt"], "same").unwrap();
 
         // Verify that the trees match for the same content.
         assert!(trees_match(&repo, &format!("{}", base_commit), &format!("{}", same_commit)).unwrap());
@@ -1263,11 +1502,11 @@ mod tests {
         let (temp_dir, repo) = create_test_repo();
 
         // Create a base commit with a file.
-        let base_commit = commit(&repo, &["file.txt"], "base").unwrap();
+        let base_commit = stage_and_commit(&repo, &["file.txt"], "base").unwrap();
 
         // Create a second commit with different file content.
         temp_dir.child("file.txt").write_str("different content").unwrap();
-        let different_commit = commit(&repo, &["file.txt"], "different").unwrap();
+        let different_commit = stage_and_commit(&repo, &["file.txt"], "different").unwrap();
 
         // Verify that the trees do not match for different content.
         assert!(!trees_match(&repo, &format!("{}", base_commit), &format!("{}", different_commit)).unwrap());
@@ -1280,7 +1519,7 @@ mod tests {
         let (_temp_dir, repo) = create_test_repo();
 
         // Create a base commit with a file.
-        let base_commit = commit(&repo, &["file.txt"], "base").unwrap();
+        let base_commit = stage_and_commit(&repo, &["file.txt"], "base").unwrap();
 
         // Verify that the trees match when comparing the same commit.
         assert!(trees_match(&repo, &format!("{}", base_commit), &format!("{}", base_commit)).unwrap());
@@ -1293,7 +1532,7 @@ mod tests {
         let (_temp_dir, repo) = create_test_repo();
 
         // Create a base commit with a file.
-        let base_commit = commit(&repo, &["file.txt"], "base").unwrap();
+        let base_commit = stage_and_commit(&repo, &["file.txt"], "base").unwrap();
 
         // Verify that the trees match when the target ref does not exist.
         // NB: We assume that a non-existent ref is treated as an empty tree, which when pushed to will match.
@@ -1309,7 +1548,7 @@ mod tests {
 
         // Create a target commit, then reset HEAD and the index while preserving files.
         temp_dir.child("file.txt").write_str("base content").unwrap();
-        let target = commit(&repo, &["file.txt"], "target").unwrap();
+        let target = stage_and_commit(&repo, &["file.txt"], "target").unwrap();
         repo.reset(base.as_object(), git2::ResetType::Mixed, None).unwrap();
 
         // Stage the same content again, leaving an unrelated file unstaged.
@@ -1337,7 +1576,7 @@ mod tests {
 
         // Create a target commit, then reset HEAD and the index while preserving files.
         temp_dir.child("file.txt").write_str("base content").unwrap();
-        let target = commit(&repo, &["file.txt"], "target").unwrap();
+        let target = stage_and_commit(&repo, &["file.txt"], "target").unwrap();
         repo.reset(base.as_object(), git2::ResetType::Mixed, None).unwrap();
 
         // Update the file and write an unrelated file.
@@ -1440,7 +1679,7 @@ mod tests {
 
         // Commit changes to the new branch.
         temp_dir.child("test.txt").write_str("test content").unwrap();
-        let new_commit_id = commit(&repo, &["test.txt"], "feat: add test.txt").unwrap();
+        let new_commit_id = stage_and_commit(&repo, &["test.txt"], "feat: add test.txt").unwrap();
         assert_eq!(repo.head().unwrap().peel_to_commit().unwrap().id(), new_commit_id);
 
         // Drop the guard without disarming to restore.
@@ -1470,7 +1709,7 @@ mod tests {
 
         // Commit changes to the new branch.
         temp_dir.child("feature.txt").write_str("feature content").unwrap();
-        let new_commit_id = commit(&repo, &["feature.txt"], "feat: add feature.txt").unwrap();
+        let new_commit_id = stage_and_commit(&repo, &["feature.txt"], "feat: add feature.txt").unwrap();
 
         // Create another branch and switch to it.
         repo.branch("other-branch", &parent, false).unwrap();

@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use assert_fs::TempDir;
+use git_reflow_api::git::stage_and_commit;
 use git_reflow_fixtures::{INSTA_STDOUT_FILTERS, project_repo};
 use git2::Repository;
 use rstest::*;
@@ -13,7 +14,7 @@ fn test_plan_command(#[with("example-python-uv-workspace")] project_repo: (TempD
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    git_reflow_api::git::commit(&repo, &["."], "chore: initial commit").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
     // Create Git tags for the current versions of the packages.
     let commit = repo.head().unwrap().peel_to_commit().unwrap();
@@ -32,7 +33,7 @@ fn test_plan_command(#[with("example-python-uv-workspace")] project_repo: (TempD
         "\ndef subtract(a: int, b: int):\n    return a - b"
     )
     .unwrap();
-    git_reflow_api::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+    stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
 
     // Run the `plan` command.
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
@@ -50,7 +51,7 @@ fn test_plan_command_with_scope(#[with("example-python-uv-workspace")] project_r
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    git_reflow_api::git::commit(&repo, &["."], "chore: initial commit").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
     // Create Git tags for the current versions of the packages.
     let commit = repo.head().unwrap().peel_to_commit().unwrap();
@@ -69,7 +70,7 @@ fn test_plan_command_with_scope(#[with("example-python-uv-workspace")] project_r
         "\ndef subtract(a: int, b: int):\n    return a - b"
     )
     .unwrap();
-    git_reflow_api::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+    stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
 
     // Run the `plan` command, scoping it to the `example-api` package only.
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
@@ -92,7 +93,7 @@ fn test_plan_command_with_show_context(#[with("example-rust-workspace")] project
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    git_reflow_api::git::commit(&repo, &["."], "chore: initial commit").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
     // Create Git tags for the current versions of the packages.
     let commit = repo.head().unwrap().peel_to_commit().unwrap();
@@ -109,7 +110,7 @@ fn test_plan_command_with_show_context(#[with("example-rust-workspace")] project
         "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
     )
     .unwrap();
-    git_reflow_api::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+    stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
 
     // Run the `plan` command, showing the `git-cliff` context.
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();

@@ -99,6 +99,7 @@ pub async fn plan_releases(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::stage_and_commit;
     use assert_fs::TempDir;
     use git_reflow_fixtures::project_repo;
     use git2::Repository;
@@ -118,7 +119,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        crate::git::commit(&repo, &["."], "chore: initial commit").unwrap();
+        stage_and_commit(&repo, ["."], "chore: initial commit").unwrap();
 
         // Create Git tags for the current versions of the packages.
         let commit = repo.head().unwrap().peel_to_commit().unwrap();
@@ -135,7 +136,7 @@ mod tests {
             "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
         )
         .unwrap();
-        crate::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+        stage_and_commit(&repo, ["."], "feat(api): add a `subtract` function").unwrap();
 
         // Call `plan_releases` and assert that the planned releases are as expected.
         // NB: We expect two planned releases: one for the root package and one for the `example-api` package.
@@ -167,7 +168,7 @@ mod tests {
 
         // Commit the current files to the `main` branch.
         repo.set_head("refs/heads/main").unwrap();
-        crate::git::commit(&repo, &["."], "chore: initial commit").unwrap();
+        stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
         // Create Git tags for the current versions of the packages.
         let commit = repo.head().unwrap().peel_to_commit().unwrap();
@@ -184,7 +185,7 @@ mod tests {
             "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
         )
         .unwrap();
-        crate::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+        stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
 
         // Call `plan_releases` with a selection of package names and assert that the planned releases are as expected.
         // NB: We expect one planned release: the `example-api` package as it is the only one selected.

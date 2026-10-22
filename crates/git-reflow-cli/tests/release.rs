@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use assert_fs::{TempDir, prelude::*};
+use git_reflow_api::git::stage_and_commit;
 use git_reflow_api::provider::{PullRequestPackage, build_pull_request_body};
 use git_reflow_fixtures::{INSTA_STDOUT_FILTERS, add_origin_remote, project_repo};
 use git2::Repository;
@@ -26,7 +27,7 @@ fn test_release_command_creates_a_release(#[with("example-rust")] project_repo: 
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    let head = git_reflow_api::git::commit(&repo, ["."], "chore: release v1.1.0").unwrap();
+    let head = stage_and_commit(&repo, &["."], "chore: release v1.1.0").unwrap();
 
     // Prepare the package included in the release pull request.
     let pkg = PullRequestPackage {
@@ -137,7 +138,7 @@ fn test_release_command_creates_multiple_releases(
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    let head = git_reflow_api::git::commit(&repo, ["."], "chore: release v0.3.0").unwrap();
+    let head = stage_and_commit(&repo, &["."], "chore: release v0.3.0").unwrap();
 
     // Prepare the packages included in the release pull request.
     let packages = vec![
@@ -291,7 +292,7 @@ fn test_release_command_can_skip_major_and_minor_tags(#[with("example-rust")] pr
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    let head = git_reflow_api::git::commit(&repo, ["."], "chore: release v1.2.3").unwrap();
+    let head = stage_and_commit(&repo, ["."], "chore: release v1.2.3").unwrap();
 
     // Prepare the package included in the release pull request.
     let pkg = PullRequestPackage {
@@ -403,7 +404,7 @@ fn test_release_command_noop_when_already_released(
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    let head = git_reflow_api::git::commit(&repo, ["."], "chore: release v0.3.0").unwrap();
+    let head = stage_and_commit(&repo, &["."], "chore: release v0.3.0").unwrap();
 
     // Create and push an existing release tag, then remove the local tag.
     // NB: The package should be skipped based on the remote tag, even when it does not exist locally.
@@ -500,7 +501,7 @@ fn test_release_command_with_dry_run(#[with("example-rust-workspace")] project_r
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    let head = git_reflow_api::git::commit(&repo, ["."], "chore: release v0.3.0").unwrap();
+    let head = stage_and_commit(&repo, &["."], "chore: release v0.3.0").unwrap();
 
     // Prepare the package included in the release pull request.
     let pkg = PullRequestPackage {

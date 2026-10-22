@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use assert_fs::{TempDir, prelude::*};
+use git_reflow_api::git::stage_and_commit;
 use git_reflow_fixtures::{INSTA_STDOUT_FILTERS, add_origin_remote, project_repo};
 use git2::Repository;
 use httpmock::prelude::*;
@@ -42,7 +43,7 @@ fn test_pr_command_creates_a_pull_request(#[with("example-rust-workspace")] proj
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    git_reflow_api::git::commit(&repo, ["."], "chore: initial commit").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
     // Create Git tags for the current versions of the packages.
     let commit = repo.head().unwrap().peel_to_commit().unwrap();
@@ -57,7 +58,7 @@ fn test_pr_command_creates_a_pull_request(#[with("example-rust-workspace")] proj
         "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
     )
     .unwrap();
-    git_reflow_api::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+    stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
     let head = repo.head().unwrap().target().unwrap();
 
     // Run the `pr` command for the changed package.
@@ -149,7 +150,7 @@ fn test_pr_command_creates_separate_pull_requests(
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    git_reflow_api::git::commit(&repo, ["."], "chore: initial commit").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
     // Create Git tags for the current versions of the packages.
     let commit = repo.head().unwrap().peel_to_commit().unwrap();
@@ -164,7 +165,7 @@ fn test_pr_command_creates_separate_pull_requests(
         "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
     )
     .unwrap();
-    git_reflow_api::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+    stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
     let head = repo.head().unwrap().target().unwrap();
 
     // Run the `pr` command for the changed packages.
@@ -233,7 +234,7 @@ fn test_pr_command_noop_when_remote_is_up_to_date(
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    git_reflow_api::git::commit(&repo, ["."], "chore: initial commit").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
     // Create Git tags for the current versions of the packages.
     let commit = repo.head().unwrap().peel_to_commit().unwrap();
@@ -248,7 +249,7 @@ fn test_pr_command_noop_when_remote_is_up_to_date(
         "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
     )
     .unwrap();
-    git_reflow_api::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+    stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
     let head = repo.head().unwrap().target().unwrap();
 
     // Run the `pr` command once to publish the release branch and create its pull request.
@@ -310,7 +311,7 @@ fn test_pr_command_noop_when_no_changes(#[with("example-rust-workspace")] projec
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    git_reflow_api::git::commit(&repo, ["."], "chore: initial commit").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
     let head = repo.head().unwrap().target().unwrap();
 
     // Create Git tags for the current versions of the packages.
@@ -356,7 +357,7 @@ fn test_pr_command_with_dry_run(#[with("example-rust-workspace")] project_repo: 
 
     // Commit the current files to the `main` branch.
     repo.set_head("refs/heads/main").unwrap();
-    git_reflow_api::git::commit(&repo, ["."], "chore: initial commit").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
 
     // Create Git tags for the current versions of the packages.
     let commit = repo.head().unwrap().peel_to_commit().unwrap();
@@ -371,7 +372,7 @@ fn test_pr_command_with_dry_run(#[with("example-rust-workspace")] project_repo: 
         "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
     )
     .unwrap();
-    git_reflow_api::git::commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+    stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
     let head = repo.head().unwrap().target().unwrap();
 
     // Run the `pr` command with `--dry-run` for the changed package.
