@@ -21,12 +21,12 @@ pub struct GitHubProvider {
     ///
     /// **Default:** github.com
     #[serde(default = "default_host")]
-    host: String,
+    pub host: String,
     /// Whether to commit changes via the GitHub API instead of using the local Git client.
     ///
     /// **Default:** `true`
     #[serde(default = "default_commit_via_api")]
-    commit_via_api: bool,
+    pub commit_via_api: bool,
     /// The [`Octocrab`] client used to interact with the GitHub API.
     ///
     /// **See Also:** [`GitHubProvider::client`]

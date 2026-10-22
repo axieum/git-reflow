@@ -35,10 +35,16 @@ fn test_pr_command_creates_a_pull_request(#[with("example-rust-workspace")] proj
     });
 
     // Configure `git-reflow` by:
-    // - Setting the GitHub host to the mock server's base URL.
+    // - Setting the GitHub host to the mock server's base URL;
+    // - Disabling commits via the GitHub API.
     project_dir
         .child(".reflow.json")
-        .write_str(&json!({"git": {"provider": {"github": {"host": server.base_url()}}}}).to_string())
+        .write_str(
+            &json!({
+                "git": { "provider": { "github": { "host": server.base_url(), "commit-via-api": false } } }
+            })
+            .to_string(),
+        )
         .unwrap();
 
     // Commit the current files to the `main` branch.
@@ -134,13 +140,14 @@ fn test_pr_command_creates_separate_pull_requests(
 
     // Configure `git-reflow` by:
     // - Setting the GitHub host to the mock server's base URL;
+    // - Disabling commits via the GitHub API;
     // - Enabling separate pull requests for each package.
     project_dir
         .child(".reflow.json")
         .write_str(
             &json!({
                 "git": {
-                    "provider": { "github": { "host": server.base_url() } },
+                    "provider": { "github": { "host": server.base_url(), "commit-via-api": false } },
                     "separate-pull-requests": true,
                 },
             })
@@ -198,6 +205,126 @@ fn test_pr_command_creates_separate_pull_requests(
     });
 }
 
+/// Tests that the `pr` command pushes a release branch, writes changes via the GitHub API, and outputs the created pull request.
+#[rstest]
+fn test_pr_command_commits_via_github_api(#[with("example-rust-workspace")] project_repo: (TempDir, Repository)) {
+    // Create a Git repository and add an `origin` remote so that release branches can be pushed to it.
+    let (project_dir, repo) = project_repo;
+    let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+
+    // Set up a mock server to simulate the GitHub pull request API.
+    let server = MockServer::start();
+    let list_mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octocat/Hello-World/pulls")
+            .query_param("head", "octocat:reflow--branches--main")
+            .query_param("base", "main");
+        then.status(200).header("content-type", "application/json").body("[]");
+    });
+    let create_mock = server.mock(|when, then| {
+        when.method(POST).path("/repos/octocat/Hello-World/pulls");
+        then.status(201)
+            .header("content-type", "application/json")
+            .body(include_str!(
+                "../../git-reflow-api/tests/fixtures/github_pulls_retrieve.json"
+            ));
+    });
+
+    // Configure `git-reflow` by:
+    // - Setting the GitHub host to the mock server's base URL;
+    // - Enabling commits via the GitHub API.
+    project_dir
+        .child(".reflow.json")
+        .write_str(
+            &json!({
+                "git": { "provider": { "github": { "host": server.base_url(), "commit-via-api": true } } }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+    // Commit the current files to the `main` branch.
+    repo.set_head("refs/heads/main").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
+
+    // Create Git tags for the current versions of the packages.
+    let commit = repo.head().unwrap().peel_to_commit().unwrap();
+    for tag in ["v1.0.0", "example-api-v1.0.0", "example-cli-v1.0.0"] {
+        repo.tag_lightweight(tag, commit.as_object(), false).unwrap();
+    }
+
+    // Create some changes in the packages and commit those changes.
+    let lib_rs_path = project_dir.path().join("crates/example-api/src/lib.rs");
+    writeln!(
+        fs::OpenOptions::new().append(true).open(&lib_rs_path).unwrap(),
+        "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
+    )
+    .unwrap();
+    stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+    let head = repo.head().unwrap().target().unwrap();
+
+    // Mock a GitHub API commit against the original branch head with the release file changes.
+    let api_commit_id = "0123456789abcdef0123456789abcdef01234567";
+    let commit_mock = server.mock(|when, then| {
+        when.method(POST).path("/graphql").json_body_includes(
+            json!({
+                "query": "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+                "variables": {
+                    "input": {
+                        "branch": {
+                            "repositoryNameWithOwner": "octocat/Hello-World",
+                            "branchName": "reflow--branches--main",
+                        },
+                        "expectedHeadOid": head.to_string(),
+                        "message": { "headline": "chore: release v1.1.0", "body": null },
+                        "fileChanges": {
+                            "additions": [
+                                { "path": "CHANGELOG.md" },
+                                { "path": "Cargo.lock" },
+                                { "path": "crates/example-api/CHANGELOG.md" },
+                                { "path": "crates/example-api/Cargo.toml" },
+                            ],
+                            "deletions": [],
+                        },
+                    },
+                },
+            })
+            .to_string(),
+        );
+        then.status(200).json_body(json!({
+            "data": { "createCommitOnBranch": { "commit": { "oid": api_commit_id } } },
+        }));
+    });
+
+    // Run the `pr` command for the changed packages.
+    let assert = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .current_dir(&project_dir)
+        .env("GITHUB_TOKEN", "test-token")
+        .arg("pr")
+        .assert()
+        .success();
+    assert!(assert.get_output().stdout.len() > 3, "expected non-empty JSON output");
+
+    // Verify that the original branch, commit and clean working directory were restored.
+    assert_eq!(repo.head().unwrap().shorthand().unwrap(), "main");
+    assert_eq!(repo.head().unwrap().target().unwrap(), head);
+    assert!(repo.statuses(None).unwrap().is_empty(), "uncommitted changes");
+
+    // Verify that the release changes were committed via the API and one combined pull request was created.
+    commit_mock.assert_calls(1);
+    list_mock.assert_calls(1);
+    create_mock.assert_calls(1);
+
+    // Verify that the release branch was pushed without creating a local release commit.
+    // NB: The mocked API does not update the remote branch with its returned commit.
+    assert_eq!(repo.refname_to_id("refs/heads/reflow--branches--main").unwrap(), head);
+    assert_eq!(
+        remote_repo.refname_to_id("refs/heads/reflow--branches--main").unwrap(),
+        head,
+    );
+}
+
 /// Tests that the `pr` command makes no changes or pull requests when the remote is already up-to-date.
 #[rstest]
 fn test_pr_command_noop_when_remote_is_up_to_date(
@@ -226,10 +353,16 @@ fn test_pr_command_noop_when_remote_is_up_to_date(
     });
 
     // Configure `git-reflow` by:
-    // - Setting the GitHub host to the mock server's base URL.
+    // - Setting the GitHub host to the mock server's base URL;
+    // - Disabling commits via the GitHub API.
     project_dir
         .child(".reflow.json")
-        .write_str(&json!({"git": {"provider": {"github": {"host": server.base_url()}}}}).to_string())
+        .write_str(
+            &json!({
+                "git": { "provider": { "github": { "host": server.base_url(), "commit-via-api": false } } }
+            })
+            .to_string(),
+        )
         .unwrap();
 
     // Commit the current files to the `main` branch.
@@ -306,7 +439,7 @@ fn test_pr_command_noop_when_no_changes(#[with("example-rust-workspace")] projec
     // - Setting the GitHub host to the mock server's base URL.
     project_dir
         .child(".reflow.json")
-        .write_str(&json!({"git": {"provider": {"github": {"host": server.base_url()}}}}).to_string())
+        .write_str(&json!({ "git": { "provider": { "github": { "host": server.base_url() } } } }).to_string())
         .unwrap();
 
     // Commit the current files to the `main` branch.
@@ -339,7 +472,10 @@ fn test_pr_command_noop_when_no_changes(#[with("example-rust-workspace")] projec
 
 /// Tests that the `pr` command with `--dry-run` reports on the activity that would happen without taking action.
 #[rstest]
-fn test_pr_command_with_dry_run(#[with("example-rust-workspace")] project_repo: (TempDir, Repository)) {
+fn test_pr_command_with_dry_run(
+    #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+    #[values(false, true)] commit_via_api: bool,
+) {
     // Create a Git repository and add an `origin` remote so that we ensure nothing is pushed to it.
     let (project_dir, repo) = project_repo;
     let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
@@ -349,10 +485,16 @@ fn test_pr_command_with_dry_run(#[with("example-rust-workspace")] project_repo: 
     let server = MockServer::start();
 
     // Configure `git-reflow` by:
-    // - Setting the GitHub host to the mock server's base URL.
+    // - Setting the GitHub host to the mock server's base URL;
+    // - Optionally enabling commits via the GitHub API.
     project_dir
         .child(".reflow.json")
-        .write_str(&json!({"git": {"provider": {"github": {"host": server.base_url()}}}}).to_string())
+        .write_str(
+            &json!({
+                "git": { "provider": { "github": { "host": server.base_url(), "commit-via-api": commit_via_api } } }
+            })
+            .to_string(),
+        )
         .unwrap();
 
     // Commit the current files to the `main` branch.
@@ -390,7 +532,7 @@ fn test_pr_command_with_dry_run(#[with("example-rust-workspace")] project_repo: 
     assert!(repo.find_reference("refs/heads/reflow--branches--main").is_err());
     assert!(remote_repo.find_reference("refs/heads/reflow--branches--main").is_err());
 
-    // Verify that a pull request was reported on for the release branch.
+    // Verify that a pull request was _reported_ on for the release branch.
     // NB: We expect one combined pull request, since `separate_pull_requests` is false by default.
 
     insta::with_settings!({ filters => INSTA_STDOUT_FILTERS }, {

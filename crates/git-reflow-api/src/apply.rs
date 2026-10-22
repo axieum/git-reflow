@@ -1,10 +1,10 @@
 use crate::git::{
-    BranchGuard, commit, create_or_reset_branch, ensure_clean_working_directory, fetch_branch, get_origin_remote,
-    push_branch, sanitize_branch_name, stage, trees_match,
+    BranchGuard, RemoteRef, commit, create_or_reset_branch, ensure_clean_working_directory, fetch_branch,
+    get_origin_remote, push_branch, sanitize_branch_name, stage, trees_match,
 };
 use crate::git_cliff::write_changelog_markdown;
 use crate::plan::PackageRelease;
-use crate::provider::{BaseGitProvider, PullRequest, PullRequestPackage, build_pull_request_body};
+use crate::provider::{BaseGitProvider, GitProvider, PullRequest, PullRequestPackage, build_pull_request_body};
 use crate::settings::AppConfig;
 use crate::strategy::BaseStrategy;
 use anyhow::{Context, anyhow, ensure};
@@ -124,22 +124,8 @@ pub async fn apply_release_plan(
             continue;
         }
 
-        // Commit the changes to the branch.
-        if !dry_run {
-            debug!("commit changes to branch `{}`", branch_name);
-            let commit_id = commit(&repo, tree_id.unwrap(), pr_title)?;
-            debug!("✅ created commit: {} ({})", &pr_title, commit_id);
-        } else {
-            debug!("✅ created commit `{}` (dry run)", &pr_title);
-        }
-
-        // Push the branch to the remote Git repository.
-        if !dry_run {
-            debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
-            push_branch(&repo, &branch_name, true)?;
-        } else {
-            debug!("push branch `{}` to remote `{}` (dry run)", branch_name, remote.url);
-        }
+        // Commit and push the staged changes to the remote Git repository.
+        commit_and_push_to_remote(config, &repo, &remote, &branch_name, pr_title, tree_id, dry_run).await?;
 
         // Create or update the pull request for the branch.
         if !dry_run {
@@ -282,6 +268,83 @@ pub fn should_push_to_remote(
     }
 }
 
+/// Commits and pushes the staged changes to the remote Git repository.
+///
+/// # Arguments
+///
+/// * `config` - The app configuration.
+/// * `repo` - The Git repository.
+/// * `remote` - The remote Git repository reference.
+/// * `branch_name` - The name of the release branch.
+/// * `commit_message` - The commit message for the release branch.
+/// * `tree_id` - The staged tree ID to commit.
+/// * `dry_run` - If true, do not actually commit the changes or push them.
+///
+/// # Returns
+///
+/// A result containing the created commit ID, or `None` for a dry run.
+pub async fn commit_and_push_to_remote(
+    config: &AppConfig,
+    repo: &git2::Repository,
+    remote: &RemoteRef,
+    branch_name: &str,
+    commit_message: &str,
+    tree_id: Option<git2::Oid>,
+    dry_run: bool,
+) -> anyhow::Result<Option<git2::Oid>> {
+    // Short-circuit for dry runs, logging the operations that would be performed.
+    if dry_run {
+        match &config.git.provider {
+            GitProvider::GitHub(provider) if provider.commit_via_api => {
+                debug!("push branch `{}` to remote `{}` (dry run)", branch_name, remote.url);
+                debug!("commit changes to branch `{}` (via GitHub API) (dry run)", branch_name);
+                debug!("✅ created commit: `{}` (dry run)", commit_message);
+            }
+            _ => {
+                debug!("commit changes to branch `{}` (dry run)", branch_name);
+                debug!("✅ created commit: `{}` (dry run)", commit_message);
+                debug!("push branch `{}` to remote `{}` (dry run)", branch_name, remote.url);
+            }
+        }
+        return Ok(None);
+    }
+
+    // Commit and push the staged changes to the remote branch.
+    let tree_id = tree_id.context("a staged tree is required to commit release changes")?;
+    let commit_id = match &config.git.provider {
+        // GitHub API commits require pushing the branch first, then creating the commit via the API.
+        GitProvider::GitHub(provider) if provider.commit_via_api => {
+            debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
+            push_branch(repo, branch_name, true)?;
+            debug!("commit changes to branch `{}` (via GitHub API)", branch_name);
+            let commit_id = provider
+                .commit(
+                    &remote.owner,
+                    &remote.repo,
+                    repo,
+                    branch_name,
+                    tree_id,
+                    commit_message,
+                    None,
+                )
+                .await?;
+            debug!("✅ created commit: `{}` ({})", commit_message, commit_id);
+            commit_id
+        }
+        // Otherwise, commit the changes locally, then push the branch to the remote.
+        _ => {
+            debug!("commit changes to branch `{}`", branch_name);
+            let commit_id = commit(repo, tree_id, commit_message)?;
+            debug!("✅ created commit: `{}` ({})", commit_message, commit_id);
+            debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
+            push_branch(repo, branch_name, true)?;
+            commit_id
+        }
+    };
+
+    Ok(Some(commit_id))
+}
+
 /// Builds the release branch name for a given package release.
 ///
 /// # Arguments
@@ -335,7 +398,8 @@ mod tests {
         let mut config = crate::settings::load(None).unwrap();
 
         // Set up a mock server to simulate the GitHub API.
-        let provider = GitHubProvider::default();
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = false;
         let server = mock_octocrab(&provider).await;
         let list_mock = server.mock(|when, then| {
             when.method(GET)
@@ -464,7 +528,8 @@ mod tests {
         config.git.separate_pull_requests = true; // NB: Here, we enable separate pull requests.
 
         // Set up a mock server to simulate the GitHub API.
-        let provider = GitHubProvider::default();
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = false;
         let server = mock_octocrab(&provider).await;
         let server_mocks = vec![
             server.mock(|when, then| {
@@ -810,6 +875,215 @@ mod tests {
         // Verify that the release branch should not be pushed when its message and tree are unchanged.
         assert!(!should_push_to_remote(&repo, "reflow--branches--main", "chore: release v0.3.0", tree_id).unwrap());
         assert_eq!(repo.head().unwrap().target(), Some(head));
+    }
+
+    /// Tests that release changes are committed locally before pushing the release branch.
+    #[rstest]
+    #[tokio::test]
+    async fn test_commit_and_push_to_remote(#[with("example-rust-workspace")] project_repo: (TempDir, Repository)) {
+        // Create a Git repository and add an `origin` remote.
+        let (project_dir, repo) = project_repo;
+        let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+        let remote = get_origin_remote(&repo).unwrap().unwrap();
+
+        // Create the release branch and stage the release changes.
+        let head = stage_and_commit(&repo, &["."], "initial").unwrap();
+        let branch_name = "reflow--branches--main";
+        create_or_reset_branch(&repo, branch_name, head).unwrap();
+        project_dir.child("release.txt").write_str("release").unwrap();
+        let tree_id = stage(&repo, &["release.txt"]).unwrap();
+
+        // Configure the GitHub provider to commit locally.
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = false;
+        let mut config = AppConfig::default();
+        config.git.provider = GitProvider::GitHub(provider);
+
+        // Commit the release changes and push the branch to the remote.
+        let commit_id =
+            commit_and_push_to_remote(&config, &repo, &remote, branch_name, "release", Some(tree_id), false)
+                .await
+                .unwrap()
+                .unwrap();
+
+        // Verify that the local and remote branches point to the release commit.
+        assert_ne!(commit_id, head);
+        assert_eq!(repo.head().unwrap().target(), Some(commit_id));
+        assert_eq!(
+            remote_repo
+                .find_reference(&format!("refs/heads/{branch_name}"))
+                .unwrap()
+                .target(),
+            Some(commit_id),
+        );
+
+        // Verify that the release commit contains the staged tree and commit message.
+        let release_commit = repo.find_commit(commit_id).unwrap();
+        assert_eq!(release_commit.tree_id(), tree_id);
+        assert_eq!(release_commit.message().unwrap(), "release");
+    }
+
+    /// Tests that a missing or invalid tree ID fails without committing or pushing the release branch.
+    #[rstest]
+    #[case::missing(None)]
+    #[case::invalid(Some(git2::Oid::ZERO_SHA1))]
+    #[tokio::test]
+    async fn test_commit_and_push_to_remote_with_invalid_tree_id(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+        #[case] tree_id: Option<git2::Oid>,
+    ) {
+        // Create a Git repository and add an `origin` remote.
+        let (_project_dir, repo) = project_repo;
+        let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+        let remote = get_origin_remote(&repo).unwrap().unwrap();
+
+        // Create the release branch without committing release changes.
+        let head = stage_and_commit(&repo, &["."], "initial").unwrap();
+        let branch_name = "reflow--branches--main";
+        create_or_reset_branch(&repo, branch_name, head).unwrap();
+
+        // Configure the GitHub provider to commit locally.
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = false;
+        let mut config = AppConfig::default();
+        config.git.provider = GitProvider::GitHub(provider);
+
+        // Attempt to commit and push with a missing or invalid tree ID.
+        let error = commit_and_push_to_remote(&config, &repo, &remote, branch_name, "release", tree_id, false)
+            .await
+            .unwrap_err();
+
+        // Verify that the expected error is returned.
+        if tree_id.is_none() {
+            assert_eq!(error.to_string(), "a staged tree is required to commit release changes");
+        } else {
+            assert_eq!(
+                error.downcast_ref::<git2::Error>().unwrap().code(),
+                git2::ErrorCode::NotFound,
+            );
+        }
+
+        // Verify that no commit was created and the release branch was not pushed.
+        assert_eq!(repo.head().unwrap().target(), Some(head));
+        let remote_branch = remote_repo.find_reference(&format!("refs/heads/{branch_name}"));
+        assert!(matches!(remote_branch, Err(error) if error.code() == git2::ErrorCode::NotFound));
+    }
+
+    /// Tests that the release branch is pushed and release changes are committed via the GitHub API.
+    #[rstest]
+    #[tokio::test]
+    async fn test_commit_and_push_to_remote_with_github(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+    ) {
+        // Create a Git repository and add an `origin` remote.
+        let (project_dir, repo) = project_repo;
+        let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+        let remote = get_origin_remote(&repo).unwrap().unwrap();
+
+        // Create the release branch and stage the release changes.
+        let head = stage_and_commit(&repo, &["."], "initial").unwrap();
+        let branch_name = "reflow--branches--main";
+        create_or_reset_branch(&repo, branch_name, head).unwrap();
+        project_dir.child("release.txt").write_str("release").unwrap();
+        let tree_id = stage(&repo, &["release.txt"]).unwrap();
+
+        // Set up a mock server to simulate committing the staged changes via the GitHub API.
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = true;
+        let server = mock_octocrab(&provider).await;
+        let api_commit_id = git2::Oid::from_str("0123456789abcdef0123456789abcdef01234567").unwrap();
+        let graphql_mock = server.mock(|when, then| {
+            when.method(POST).path("/graphql").json_body(json!({
+                "query": "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+                "variables": {
+                    "input": {
+                        "branch": {
+                            "repositoryNameWithOwner": "octocat/Hello-World",
+                            "branchName": branch_name,
+                        },
+                        "expectedHeadOid": head.to_string(),
+                        "message": { "headline": "release", "body": null },
+                        "fileChanges": {
+                            "additions": [{ "path": "release.txt", "contents": "cmVsZWFzZQ==" }],
+                            "deletions": [],
+                        },
+                    },
+                },
+            }));
+            then.status(200).json_body(json!({
+                "data": { "createCommitOnBranch": { "commit": { "oid": api_commit_id.to_string() } } },
+            }));
+        });
+        let mut config = AppConfig::default();
+        config.git.provider = GitProvider::GitHub(provider);
+
+        // Push the release branch and commit the release changes via the GitHub API.
+        let commit_id =
+            commit_and_push_to_remote(&config, &repo, &remote, branch_name, "release", Some(tree_id), false)
+                .await
+                .unwrap();
+
+        // Verify that GitHub created the commit without creating a local release commit.
+        graphql_mock.assert_async().await;
+        assert_eq!(commit_id, Some(api_commit_id));
+        assert_eq!(repo.head().unwrap().target(), Some(head));
+
+        // Verify that the branch was pushed at the original commit before the API commit.
+        let remote_branch = remote_repo
+            .find_reference(&format!("refs/heads/{branch_name}"))
+            .unwrap();
+        assert_eq!(remote_branch.target(), Some(head));
+    }
+
+    /// Tests that dry runs neither commit nor push changes for local and GitHub API commits.
+    #[rstest]
+    #[tokio::test]
+    async fn test_commit_and_push_to_remote_with_dry_run(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+        #[values(false, true)] commit_via_api: bool,
+    ) {
+        // Create a Git repository and add an `origin` remote.
+        let (project_dir, repo) = project_repo;
+        let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+        let remote = get_origin_remote(&repo).unwrap().unwrap();
+
+        // Record the original repository state and leave the release changes unstaged.
+        let head = stage_and_commit(&repo, &["."], "initial").unwrap();
+        let index_tree_id = repo.index().unwrap().write_tree().unwrap();
+        let branch_name = "reflow--branches--main";
+        project_dir.child("release.txt").write_str("release").unwrap();
+
+        // Set up a mock server to detect any unexpected GitHub API commits.
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = commit_via_api;
+        let server = mock_octocrab(&provider).await;
+        let graphql_mock = server.mock(|when, then| {
+            when.method(POST).path("/graphql");
+            then.status(500);
+        });
+        let mut config = AppConfig::default();
+        config.git.provider = GitProvider::GitHub(provider);
+
+        // Simulate committing and pushing without a staged tree or release branch.
+        let commit_id = commit_and_push_to_remote(&config, &repo, &remote, branch_name, "release", None, true)
+            .await
+            .unwrap();
+
+        // Verify that no API request or commit was made and the repository state is unchanged.
+        graphql_mock.assert_calls_async(0).await;
+        assert_eq!(commit_id, None);
+        assert_eq!(repo.head().unwrap().target(), Some(head));
+        assert_eq!(repo.index().unwrap().write_tree().unwrap(), index_tree_id);
+        assert_eq!(
+            std::fs::read_to_string(project_dir.child("release.txt")).unwrap(),
+            "release",
+        );
+
+        // Verify that the release branch was neither created locally nor pushed to the remote.
+        let local_branch = repo.find_reference(&format!("refs/heads/{branch_name}"));
+        assert!(matches!(local_branch, Err(error) if error.code() == git2::ErrorCode::NotFound));
+        let remote_branch = remote_repo.find_reference(&format!("refs/heads/{branch_name}"));
+        assert!(matches!(remote_branch, Err(error) if error.code() == git2::ErrorCode::NotFound));
     }
 
     /// Tests that the release branch name is built correctly for a combined release.
