@@ -76,7 +76,7 @@ pub trait BaseGitProvider {
     ///
     /// # Arguments
     ///
-    /// * `owner` - The owner of the repository (user or organization).
+    /// * `owner` - The owner of the repository (user or organisation).
     /// * `repo` - The name of the repository.
     /// * `commit` - The commit SHA to search for associated pull requests.
     ///

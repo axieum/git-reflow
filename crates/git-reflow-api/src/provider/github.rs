@@ -7,6 +7,7 @@ use base64::engine::general_purpose::STANDARD;
 use octocrab::Octocrab;
 use octocrab::commits::PullRequestTarget;
 use octocrab::params::State;
+use octocrab::params::repos::Reference;
 use octocrab::repos::releases::MakeLatest;
 use std::borrow::Cow;
 use std::env;
@@ -22,7 +23,7 @@ pub struct GitHubProvider {
     /// **Default:** github.com
     #[serde(default = "default_host")]
     pub host: String,
-    /// Whether to commit changes via the GitHub API instead of using the local Git client.
+    /// Whether to commit changes and create release tags via the GitHub API instead of using the local Git client.
     ///
     /// **Default:** `true`
     #[serde(default = "default_commit_via_api")]
@@ -87,11 +88,11 @@ impl GitHubProvider {
 
     /// Creates a commit via GitHub on the given branch with the specified commit message and file changes.
     ///
-    /// [https://docs.github.com/en/graphql/reference/commits#mutation-createcommitonbranch](https://docs.github.com/en/graphql/reference/commits#mutation-createcommitonbranch)
+    /// See: [GitHub API Documentation](https://docs.github.com/en/graphql/reference/commits#mutation-createcommitonbranch)
     ///
     /// # Arguments
     ///
-    /// * `owner` - The owner of the GitHub repository (user or organization).
+    /// * `owner` - The owner of the GitHub repository (user or organisation).
     /// * `repo_name` - The name of the GitHub repository.
     /// * `repo` - The local Git repository.
     /// * `branch_name` - The name of the branch to commit to.
@@ -243,6 +244,50 @@ impl GitHubProvider {
         // Return the OID of the newly created commit.
         git2::Oid::from_str(&response.create_commit_on_branch.commit.oid)
             .context("GitHub returned an invalid commit OID")
+    }
+
+    /// Creates an annotated Git tag via GitHub at the given commit SHA, replacing the remote tag if it already exists.
+    ///
+    /// See: [GitHub API Documentation](https://docs.github.com/en/rest/git/tags?apiVersion=2026-03-10#create-a-tag-object)
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner of the GitHub repository (user or organisation).
+    /// * `repo` - The name of the GitHub repository.
+    /// * `name` - The name of the tag to create.
+    /// * `commit_sha` - The commit SHA to tag.
+    ///
+    /// # Returns
+    ///
+    /// A result indicating whether the tag was created successfully.
+    pub async fn tag(&self, owner: &str, repo: &str, name: &str, commit_sha: &str) -> anyhow::Result<()> {
+        let git = self.client()?.git(owner, repo);
+        let reference = Reference::Tag(name.to_string());
+
+        // Create the annotated tag object.
+        trace!("create annotated tag `{name}` at commit `{commit_sha}`");
+        let tag = git
+            .create_tag(name, name, commit_sha, "commit")
+            .send()
+            .await
+            .with_context(|| format!("failed to create tag `{name}` via GitHub on `{owner}/{repo}`"))?;
+
+        // Create the reference, or force-update it when the tag already exists.
+        trace!("set tag reference `{name}` to point to `{commit_sha}`");
+        match git.create_ref(&reference, &tag.sha).await {
+            // The reference already exists, force-update it to point to the new tag.
+            Err(octocrab::Error::GitHub { source, .. })
+                if source.status_code.as_u16() == 422 && source.message == "Reference already exists" =>
+            {
+                trace!("update existing tag reference `{name}` to point to `{commit_sha}`: {source:?}");
+                git.update_ref(&reference, tag.sha).force(true).send().await
+            }
+            // The reference was created successfully.
+            result => result,
+        }
+        .with_context(|| format!("failed to set tag reference `{name}` via GitHub on `{owner}/{repo}`"))?;
+
+        Ok(())
     }
 }
 
@@ -917,6 +962,185 @@ pub mod tests {
 
         // Verify that the request was submitted and the error includes operation context.
         graphql_mock.assert_async().await;
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains(expected_error), "{error:#}");
+    }
+
+    /// Tests that a Git tag is created on GitHub against the given commit SHA.
+    #[rstest]
+    #[tokio::test]
+    async fn test_tag(provider: GitHubProvider) {
+        // Set up a mock server to simulate the GitHub API.
+        let server = mock_octocrab(&provider).await;
+        let tag_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/repos/octocat/Hello-World/git/tags")
+                .json_body(json!({
+                    "tag": "v1.0.0",
+                    "message": "v1.0.0",
+                    "object": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+                    "type": "commit",
+                }));
+            then.status(201).json_body(json!({
+                "node_id": "tag-object",
+                "tag": "v1.0.0",
+                "sha": "0123456789abcdef0123456789abcdef01234567",
+                "url": "https://api.github.com/repos/octocat/Hello-World/git/tags/0123456789abcdef0123456789abcdef01234567",
+                "message": "v1.0.0",
+            }));
+        });
+        let ref_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/repos/octocat/Hello-World/git/refs")
+                .json_body(json!({
+                    "ref": "refs/tags/v1.0.0",
+                    "sha": "0123456789abcdef0123456789abcdef01234567",
+                }));
+            then.status(201).json_body(json!({
+                "ref": "refs/tags/v1.0.0",
+                "node_id": "tag-ref",
+                "url": "https://api.github.com/repos/octocat/Hello-World/git/refs/tags/v1.0.0",
+                "object": {
+                    "type": "tag",
+                    "sha": "0123456789abcdef0123456789abcdef01234567",
+                    "url": "https://api.github.com/repos/octocat/Hello-World/git/tags/0123456789abcdef0123456789abcdef01234567",
+                },
+            }));
+        });
+
+        // Create a tag against the given commit SHA.
+        let result = provider
+            .tag(
+                "octocat",
+                "Hello-World",
+                "v1.0.0",
+                "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+            )
+            .await;
+
+        // Ensure the annotated tag and its reference were created successfully.
+        tag_mock.assert_async().await;
+        ref_mock.assert_async().await;
+        result.unwrap();
+    }
+
+    /// Tests that a Git tag is replaced on GitHub against the given commit SHA when it already exists.
+    #[rstest]
+    #[tokio::test]
+    async fn test_tag_updates_an_existing_tag(provider: GitHubProvider) {
+        // Set up a mock server to simulate the GitHub API.
+        let server = mock_octocrab(&provider).await;
+        let tag_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/repos/octocat/Hello-World/git/tags")
+                .json_body(json!({
+                    "tag": "v1.0.0",
+                    "message": "v1.0.0",
+                    "object": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+                    "type": "commit",
+                }));
+            then.status(201).json_body(json!({
+                "node_id": "tag-object",
+                "tag": "v1.0.0",
+                "sha": "0123456789abcdef0123456789abcdef01234567",
+                "url": "https://api.github.com/repos/octocat/Hello-World/git/tags/0123456789abcdef0123456789abcdef01234567",
+                "message": "v1.0.0",
+            }));
+        });
+        let create_ref_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/repos/octocat/Hello-World/git/refs")
+                .json_body(json!({
+                    "ref": "refs/tags/v1.0.0",
+                    "sha": "0123456789abcdef0123456789abcdef01234567",
+                }));
+            then.status(422)
+                .json_body(json!({"message": "Reference already exists"}));
+        });
+        let update_ref_mock = server.mock(|when, then| {
+            when.method(PATCH)
+                .path("/repos/octocat/Hello-World/git/refs/tags/v1.0.0")
+                .json_body(json!({
+                    "sha": "0123456789abcdef0123456789abcdef01234567",
+                    "force": true,
+                }));
+            then.status(200).json_body(json!({
+                "ref": "refs/tags/v1.0.0",
+                "node_id": "tag-ref",
+                "url": "https://api.github.com/repos/octocat/Hello-World/git/refs/tags/v1.0.0",
+                "object": {
+                    "type": "tag",
+                    "sha": "0123456789abcdef0123456789abcdef01234567",
+                    "url": "https://api.github.com/repos/octocat/Hello-World/git/tags/0123456789abcdef0123456789abcdef01234567",
+                },
+            }));
+        });
+
+        // Replace an existing tag against the given commit SHA.
+        let result = provider
+            .tag(
+                "octocat",
+                "Hello-World",
+                "v1.0.0",
+                "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+            )
+            .await;
+
+        // Ensure the annotated tag was created and its existing reference was force-updated.
+        tag_mock.assert_async().await;
+        create_ref_mock.assert_async().await;
+        update_ref_mock.assert_async().await;
+        result.unwrap();
+    }
+
+    /// Tests that REST API errors and invalid commit SHAs are returned with operation context.
+    #[rstest]
+    #[case::api_error(
+        403,
+        "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+        r#"{"message":"Resource not accessible by integration"}"#,
+        "failed to create tag `v1.0.0` via GitHub on `octocat/Hello-World`"
+    )]
+    #[case::invalid_sha(
+        422,
+        "invalid",
+        r#"{"message":"Validation Failed","errors":[{"resource":"Tag","field":"object","code":"invalid"}]}"#,
+        "failed to create tag `v1.0.0` via GitHub on `octocat/Hello-World`"
+    )]
+    #[tokio::test]
+    async fn test_tag_with_errors(
+        provider: GitHubProvider,
+        #[case] status: u16,
+        #[case] commit_sha: &str,
+        #[case] response: &str,
+        #[case] expected_error: &str,
+    ) {
+        // Set up a mock server to simulate a GitHub API error.
+        let server = mock_octocrab(&provider).await;
+        let tag_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/repos/octocat/Hello-World/git/tags")
+                .json_body(json!({
+                    "tag": "v1.0.0",
+                    "message": "v1.0.0",
+                    "object": commit_sha,
+                    "type": "commit",
+                }));
+            then.status(status)
+                .header("content-type", "application/json")
+                .body(response);
+        });
+        let ref_mock = server.mock(|when, then| {
+            when.method(POST).path("/repos/octocat/Hello-World/git/refs");
+            then.status(201);
+        });
+
+        // Attempt to create a tag using the mocked response.
+        let result = provider.tag("octocat", "Hello-World", "v1.0.0", commit_sha).await;
+
+        // Ensure the error includes operation context and no reference was created.
+        tag_mock.assert_async().await;
+        ref_mock.assert_calls_async(0).await;
         let error = result.unwrap_err();
         assert!(error.to_string().contains(expected_error), "{error:#}");
     }

@@ -1,5 +1,5 @@
-use crate::git::{get_origin_remote, push_tag, tag, tag_exists_on_remote};
-use crate::provider::{BaseGitProvider, parse_pull_request_body};
+use crate::git::{RemoteRef, get_origin_remote, push_tag, tag, tag_exists_on_remote};
+use crate::provider::{BaseGitProvider, GitProvider, parse_pull_request_body};
 use crate::settings::{AppConfig, pkg::PackageConfig};
 use anyhow::{Context, anyhow, ensure};
 use semver::Version;
@@ -99,6 +99,7 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
 
                 // Check if a Git tag already exists for this package name and version.
                 let tag_name = build_git_tag_name(pkg_config, &pkg.name, &pkg.version)?;
+                debug!("check tag `{tag_name}` on origin remote");
                 if tag_exists_on_remote(&repo, "origin", &tag_name)? {
                     debug!("tag `{}` already exists, skipping package", tag_name);
                     continue;
@@ -120,17 +121,7 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
 
                 // Create and push Git tag(s) for the package release.
                 for name in std::iter::once(&tag_name).chain(extra_tags.iter()) {
-                    if !dry_run {
-                        // Create a Git tag for the package release.
-                        debug!("🏷️ create tag `{name}`");
-                        tag(&repo, name, commit, true)?;
-                        // Push the Git tag to the remote repository.
-                        debug!("push tag `{name}` to remote `{}`", remote.url);
-                        push_tag(&repo, name, true)?;
-                    } else {
-                        debug!("🏷️ create tag `{name}` (dry run)");
-                        debug!("push tag `{name}` to remote `{}` (dry run)", remote.url);
-                    }
+                    tag_and_push_to_remote(config, &repo, &remote, name, commit, dry_run).await?;
                 }
 
                 // If the package is configured as `tag-only`, we are done.
@@ -201,6 +192,63 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
     }
 }
 
+/// Creates and pushes a Git tag to the remote Git repository.
+///
+/// # Arguments
+///
+/// * `config` - The app configuration.
+/// * `repo` - The Git repository.
+/// * `remote` - The remote Git repository reference.
+/// * `tag_name` - The name of the Git tag.
+/// * `commit_id` - The commit ID to create the tag at.
+/// * `dry_run` - If true, do not actually create the tag or push it.
+///
+/// # Returns
+///
+/// A result indicating whether the tag was created and pushed successfully.
+pub async fn tag_and_push_to_remote(
+    config: &AppConfig,
+    repo: &git2::Repository,
+    remote: &RemoteRef,
+    tag_name: &str,
+    commit_id: git2::Oid,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    // Short-circuit for dry runs, logging the operations that would be performed.
+    if dry_run {
+        match &config.git.provider {
+            GitProvider::GitHub(provider) if provider.commit_via_api => {
+                debug!("🏷️ create tag `{tag_name}` (via GitHub API) (dry run)");
+            }
+            _ => {
+                debug!("🏷️ create tag `{tag_name}` (dry run)");
+                debug!("push tag `{tag_name}` to remote `{}` (dry run)", remote.url);
+            }
+        }
+        return Ok(());
+    }
+
+    // Create and push the release tag to the remote repository.
+    match &config.git.provider {
+        // GitHub API tags are created directly on the remote repository.
+        GitProvider::GitHub(provider) if provider.commit_via_api => {
+            debug!("🏷️ create tag `{tag_name}` (via GitHub API)");
+            provider
+                .tag(&remote.owner, &remote.repo, tag_name, &commit_id.to_string())
+                .await?;
+        }
+        // Otherwise, create the tag locally, then push it to the remote.
+        _ => {
+            debug!("🏷️ create tag `{tag_name}`");
+            tag(repo, tag_name, commit_id, true)?;
+            debug!("push tag `{tag_name}` to remote `{}`", remote.url);
+            push_tag(repo, tag_name, true)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Builds the Git tag name for a given package release.
 ///
 /// # Arguments
@@ -255,7 +303,7 @@ mod tests {
         GitProvider, PullRequestPackage, build_pull_request_body, github::GitHubProvider, github::tests::mock_octocrab,
     };
     use crate::settings::pkg::PackageConfig;
-    use assert_fs::TempDir;
+    use assert_fs::{TempDir, prelude::*};
     use git_reflow_fixtures::{add_origin_remote, project_repo};
     use git2::Repository;
     use httpmock::prelude::*;
@@ -298,7 +346,8 @@ mod tests {
         };
 
         // Set up a mock server to simulate the GitHub API.
-        let provider = GitHubProvider::default();
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = false;
         let server = mock_octocrab(&provider).await;
         let commit_pulls_mock = server.mock(|when, then| {
             let mut body: serde_json::Value =
@@ -466,7 +515,8 @@ mod tests {
         ];
 
         // Set up a mock server to simulate the GitHub API.
-        let provider = GitHubProvider::default();
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = false;
         let server = mock_octocrab(&provider).await;
         let commit_pulls_mock = server.mock(|when, then| {
             let mut body: serde_json::Value =
@@ -594,7 +644,8 @@ mod tests {
         };
 
         // Set up a mock server to simulate the GitHub API.
-        let provider = GitHubProvider::default();
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = false;
         let server = mock_octocrab(&provider).await;
         server.mock(|when, then| {
             let mut body: serde_json::Value =
@@ -722,7 +773,8 @@ mod tests {
         repo.tag_delete("v0.3.0").unwrap();
 
         // Set up a mock server to simulate the GitHub API.
-        let provider = GitHubProvider::default();
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = false;
         let server = mock_octocrab(&provider).await;
         let commit_pulls_mock = server.mock(|when, then| {
             let mut body: serde_json::Value =
@@ -828,6 +880,200 @@ mod tests {
         assert!(repo.statuses(None).unwrap().is_empty());
         assert!(repo.tag_names(None).unwrap().is_empty());
         assert!(remote_repo.tag_names(None).unwrap().is_empty());
+    }
+
+    /// Tests that a Git tag is created locally before pushing it to the remote.
+    #[rstest]
+    #[tokio::test]
+    async fn test_tag_and_push_to_remote(#[with("example-rust-workspace")] project_repo: (TempDir, Repository)) {
+        // Create a Git repository and add an `origin` remote.
+        let (_project_dir, repo) = project_repo;
+        let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+        let remote = get_origin_remote(&repo).unwrap().unwrap();
+
+        // Create the release commit.
+        let head = stage_and_commit(&repo, &["."], "initial").unwrap();
+        let tag_name = "v1.2.3";
+
+        // Configure the GitHub provider to tag locally.
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = false;
+        let mut config = AppConfig::default();
+        config.git.provider = GitProvider::GitHub(provider);
+
+        // Create the Git tag and push it to the remote.
+        tag_and_push_to_remote(&config, &repo, &remote, tag_name, head, false)
+            .await
+            .unwrap();
+
+        // Verify that the local and remote tags point to the release commit.
+        let local_tag = repo.find_reference(&format!("refs/tags/{tag_name}")).unwrap();
+        let remote_tag = remote_repo.find_reference(&format!("refs/tags/{tag_name}")).unwrap();
+        assert_eq!(local_tag.peel_to_commit().unwrap().id(), head);
+        assert_eq!(remote_tag.peel_to_commit().unwrap().id(), head);
+        assert_eq!(remote_tag.target(), local_tag.target());
+        assert_eq!(repo.head().unwrap().target(), Some(head));
+
+        // Verify that the Git tag is annotated and has the expected name.
+        let release_tag = local_tag.peel_to_tag().unwrap();
+        assert_eq!(release_tag.name().unwrap(), tag_name);
+        assert_eq!(release_tag.target_id(), head);
+    }
+
+    /// Tests that an invalid commit ID fails without creating or pushing the Git tag.
+    #[rstest]
+    #[tokio::test]
+    async fn test_tag_and_push_to_remote_with_invalid_commit_id(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+    ) {
+        // Create a Git repository and add an `origin` remote.
+        let (_project_dir, repo) = project_repo;
+        let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+        let remote = get_origin_remote(&repo).unwrap().unwrap();
+
+        // Create the release commit without creating a tag.
+        let head = stage_and_commit(&repo, &["."], "initial").unwrap();
+        let tag_name = "v1.2.3";
+
+        // Configure the GitHub provider to tag locally.
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = false;
+        let mut config = AppConfig::default();
+        config.git.provider = GitProvider::GitHub(provider);
+
+        // Attempt to create and push a tag with an invalid commit ID.
+        let error = tag_and_push_to_remote(&config, &repo, &remote, tag_name, git2::Oid::ZERO_SHA1, false)
+            .await
+            .unwrap_err();
+
+        // Verify that the expected error is returned.
+        assert_eq!(error.to_string(), "failed to find commit");
+        assert_eq!(
+            error.downcast_ref::<git2::Error>().unwrap().code(),
+            git2::ErrorCode::NotFound,
+        );
+
+        // Verify that the release tag was neither created locally nor pushed to the remote.
+        assert_eq!(repo.head().unwrap().target(), Some(head));
+        let local_tag = repo.find_reference(&format!("refs/tags/{tag_name}"));
+        assert!(matches!(local_tag, Err(error) if error.code() == git2::ErrorCode::NotFound));
+        let remote_tag = remote_repo.find_reference(&format!("refs/tags/{tag_name}"));
+        assert!(matches!(remote_tag, Err(error) if error.code() == git2::ErrorCode::NotFound));
+    }
+
+    /// Tests that a Git tag is created on the remote via the GitHub API.
+    #[rstest]
+    #[tokio::test]
+    async fn test_tag_and_push_to_remote_with_github(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+    ) {
+        // Create a Git repository and add an `origin` remote.
+        let (_project_dir, repo) = project_repo;
+        let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+        let remote = get_origin_remote(&repo).unwrap().unwrap();
+
+        // Create the release commit.
+        let head = stage_and_commit(&repo, &["."], "initial").unwrap();
+        let tag_name = "v1.2.3";
+
+        // Set up a mock server to simulate creating the release tag via the GitHub API.
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = true;
+        let server = mock_octocrab(&provider).await;
+        let api_tag_id = git2::Oid::from_str("0123456789abcdef0123456789abcdef01234567").unwrap();
+        let tag_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/repos/octocat/Hello-World/git/tags")
+                .json_body(json!({
+                    "tag": tag_name,
+                    "message": tag_name,
+                    "object": head.to_string(),
+                    "type": "commit",
+                }));
+            then.status(201).json_body(json!({
+                "node_id": "tag-object",
+                "tag": tag_name,
+                "sha": api_tag_id.to_string(),
+                "url": format!("https://api.github.com/repos/octocat/Hello-World/git/tags/{api_tag_id}"),
+                "message": tag_name,
+            }));
+        });
+        let ref_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/repos/octocat/Hello-World/git/refs")
+                .json_body(json!({"ref": format!("refs/tags/{tag_name}"), "sha": api_tag_id.to_string()}));
+            then.status(201).json_body(json!({
+                "ref": format!("refs/tags/{tag_name}"),
+                "node_id": "tag-ref",
+                "url": format!("https://api.github.com/repos/octocat/Hello-World/git/refs/tags/{tag_name}"),
+                "object": {
+                    "type": "tag",
+                    "sha": api_tag_id.to_string(),
+                    "url": format!("https://api.github.com/repos/octocat/Hello-World/git/tags/{api_tag_id}"),
+                },
+            }));
+        });
+        let mut config = AppConfig::default();
+        config.git.provider = GitProvider::GitHub(provider);
+
+        // Create the release tag via the GitHub API.
+        tag_and_push_to_remote(&config, &repo, &remote, tag_name, head, false)
+            .await
+            .unwrap();
+
+        // Verify that GitHub created the tag and its reference without changing the local repository.
+        tag_mock.assert_async().await;
+        ref_mock.assert_async().await;
+        assert_eq!(repo.head().unwrap().target(), Some(head));
+        assert!(repo.tag_names(None).unwrap().is_empty());
+
+        // Verify that no tag was pushed via Git to the remote.
+        assert!(remote_repo.tag_names(None).unwrap().is_empty());
+    }
+
+    /// Tests that dry runs neither create nor push Git tags for local and API-driven tags.
+    #[rstest]
+    #[tokio::test]
+    async fn test_tag_and_push_to_remote_with_dry_run(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+        #[values(false, true)] commit_via_api: bool,
+    ) {
+        // Create a Git repository and add an `origin` remote.
+        let (project_dir, repo) = project_repo;
+        let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+        let remote = get_origin_remote(&repo).unwrap().unwrap();
+
+        // Record the original repository state and leave the release changes unstaged.
+        let head = stage_and_commit(&repo, &["."], "initial").unwrap();
+        let index_tree_id = repo.index().unwrap().write_tree().unwrap();
+        project_dir.child("release.txt").write_str("release").unwrap();
+
+        // Set up a mock server to detect any unexpected GitHub API requests.
+        let mut provider = GitHubProvider::default();
+        provider.commit_via_api = commit_via_api;
+        let server = mock_octocrab(&provider).await;
+        let api_mock = server.mock(|when, then| {
+            when.path_includes("/repos/octocat/Hello-World/git/");
+            then.status(500);
+        });
+        let mut config = AppConfig::default();
+        config.git.provider = GitProvider::GitHub(provider);
+
+        // Simulate creating and pushing a tag without a valid commit ID.
+        tag_and_push_to_remote(&config, &repo, &remote, "v1.2.3", git2::Oid::ZERO_SHA1, true)
+            .await
+            .unwrap();
+
+        // Verify that no API request or tag was made and the repository state is unchanged.
+        api_mock.assert_calls_async(0).await;
+        assert!(repo.tag_names(None).unwrap().is_empty());
+        assert!(remote_repo.tag_names(None).unwrap().is_empty());
+        assert_eq!(repo.head().unwrap().target(), Some(head));
+        assert_eq!(repo.index().unwrap().write_tree().unwrap(), index_tree_id);
+        assert_eq!(
+            std::fs::read_to_string(project_dir.child("release.txt")).unwrap(),
+            "release",
+        );
     }
 
     /// Tests that a Git tag name is built correctly for a package that includes its name in the tag.

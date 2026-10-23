@@ -19,10 +19,16 @@ fn test_release_command_creates_a_release(#[with("example-rust")] project_repo: 
     let server = MockServer::start();
 
     // Configure `git-reflow` by:
-    // - Setting the GitHub host to the mock server's base URL.
+    // - Setting the GitHub host to the mock server's base URL;
+    // - Disabling commits via the GitHub API.
     project_dir
         .child(".reflow.json")
-        .write_str(&json!({"git": {"provider": {"github": {"host": server.base_url()}}}}).to_string())
+        .write_str(
+            &json!({
+                "git": { "provider": { "github": { "host": server.base_url(), "commit-via-api": false } } }
+            })
+            .to_string(),
+        )
         .unwrap();
 
     // Commit the current files to the `main` branch.
@@ -130,10 +136,16 @@ fn test_release_command_creates_multiple_releases(
     let server = MockServer::start();
 
     // Configure `git-reflow` by:
-    // - Setting the GitHub host to the mock server's base URL.
+    // - Setting the GitHub host to the mock server's base URL;
+    // - Disabling commits via the GitHub API.
     project_dir
         .child(".reflow.json")
-        .write_str(&json!({"git": {"provider": {"github": {"host": server.base_url()}}}}).to_string())
+        .write_str(
+            &json!({
+                "git": { "provider": { "github": { "host": server.base_url(), "commit-via-api": false } } }
+            })
+            .to_string(),
+        )
         .unwrap();
 
     // Commit the current files to the `main` branch.
@@ -264,6 +276,177 @@ fn test_release_command_creates_multiple_releases(
     });
 }
 
+/// Tests that the `release` command creates Git tags via the GitHub API, and outputs a list of released packages.
+#[rstest]
+fn test_release_command_tags_via_github_api(#[with("example-rust-workspace")] project_repo: (TempDir, Repository)) {
+    // Create a Git repository and add an `origin` remote so that release tags can be checked.
+    let (project_dir, repo) = project_repo;
+    let (_remote_dir, _remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+
+    // Set up a mock server to simulate the GitHub API.
+    let server = MockServer::start();
+
+    // Configure `git-reflow` by:
+    // - Setting the GitHub host to the mock server's base URL;
+    // - Enabling commits via the GitHub API (default behaviour);
+    // - Enabling the creation of additional major and minor Git tags (default behaviour).
+    project_dir
+        .child(".reflow.json")
+        .write_str(
+            &json!({
+                "git": {
+                    "provider": { "github": { "host": server.base_url(), "commit-via-api": true } },
+                    "tag-major-and-minor": true, // NB: Explicitly enable this, despite it defaulting to `true`.
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+    // Commit the current files to the `main` branch.
+    repo.set_head("refs/heads/main").unwrap();
+    let head = stage_and_commit(&repo, ["."], "chore: release v0.3.0").unwrap();
+
+    // Prepare the packages included in the release pull request.
+    let packages = vec![
+        PullRequestPackage {
+            name: "example-rust-workspace".to_string(),
+            version: "0.3.0".parse().unwrap(),
+            changelog_md: Some(
+                "## [0.3.0] - 2026-09-26\n\n### Features\n\n- Add a `subtract` function and print subtractions\n"
+                    .to_string(),
+            ),
+        },
+        PullRequestPackage {
+            name: "example-api".to_string(),
+            version: "0.2.0".parse().unwrap(),
+            changelog_md: Some("## [0.2.0] - 2026-09-26\n\n### Features\n\n- Add a `subtract` function\n".to_string()),
+        },
+        PullRequestPackage {
+            name: "example-cli".to_string(),
+            version: "0.3.0".parse().unwrap(),
+            changelog_md: Some("## [0.3.0] - 2026-09-26\n\n### Features\n\n- Print subtractions\n".to_string()),
+        },
+    ];
+    let expected_releases = [
+        // The expected tag names, release title, and whether the package should be marked as the latest release.
+        (["v0.3.0", "v0.3", "v0"], "v0.3.0", true),
+        (
+            ["example-api-v0.2.0", "example-api-v0.2", "example-api-v0"],
+            "example-api: v0.2.0",
+            false,
+        ),
+        (
+            ["example-cli-v0.3.0", "example-cli-v0.3", "example-cli-v0"],
+            "example-cli: v0.3.0",
+            false,
+        ),
+    ];
+
+    // Mock the release pull request associated with the current commit.
+    let commit_pulls_mock = server.mock(|when, then| {
+        let mut body: serde_json::Value = serde_json::from_str(include_str!(
+            "../../git-reflow-api/tests/fixtures/github_commit_pulls.json"
+        ))
+        .unwrap();
+        body[0]["head"]["ref"] = json!("reflow--branches--main");
+        body[0]["body"] = json!(build_pull_request_body(packages.clone()).unwrap());
+
+        when.method(GET)
+            .path(format!("/repos/octocat/Hello-World/commits/{head}/pulls"));
+        then.status(200).json_body(body);
+    });
+
+    // Mock the creation of each annotated tag, its reference, and the package release.
+    let mut server_mocks = Vec::new();
+    for (i, (pkg, (tag_names, title, make_latest))) in packages.iter().zip(expected_releases).enumerate() {
+        // Mock the creation of the annotated tags and their references via the GitHub API.
+        for (j, tag_name) in tag_names.into_iter().enumerate() {
+            let api_tag_id = format!("{:040x}", i * 3 + j + 1);
+            server_mocks.push(server.mock(|when, then| {
+                when.method(POST)
+                    .path("/repos/octocat/Hello-World/git/tags")
+                    .json_body(json!({
+                        "tag": tag_name,
+                        "message": tag_name,
+                        "object": head.to_string(),
+                        "type": "commit",
+                    }));
+                then.status(201).json_body(json!({
+                    "node_id": format!("tag-object-{api_tag_id}"),
+                    "tag": tag_name,
+                    "sha": api_tag_id,
+                    "url": format!("https://api.github.com/repos/octocat/Hello-World/git/tags/{api_tag_id}"),
+                    "message": tag_name,
+                }));
+            }));
+            server_mocks.push(server.mock(|when, then| {
+                when.method(POST)
+                    .path("/repos/octocat/Hello-World/git/refs")
+                    .json_body(json!({
+                        "ref": format!("refs/tags/{tag_name}"),
+                        "sha": api_tag_id,
+                    }));
+                then.status(201).json_body(json!({
+                    "ref": format!("refs/tags/{tag_name}"),
+                    "node_id": format!("tag-ref-{api_tag_id}"),
+                    "url": format!("https://api.github.com/repos/octocat/Hello-World/git/refs/tags/{tag_name}"),
+                    "object": {
+                        "type": "tag",
+                        "sha": api_tag_id,
+                        "url": format!("https://api.github.com/repos/octocat/Hello-World/git/tags/{api_tag_id}"),
+                    },
+                }));
+            }));
+        }
+        // Mock the creation of the release for the package via the GitHub API.
+        let tag_name = tag_names[0];
+        server_mocks.push(server.mock(|when, then| {
+            when.method(GET)
+                .path(format!("/repos/octocat/Hello-World/releases/tags/{tag_name}"));
+            then.status(404).json_body(json!({"message": "Not Found"}));
+        }));
+        server_mocks.push(server.mock(|when, then| {
+            let mut body: serde_json::Value = serde_json::from_str(include_str!(
+                "../../git-reflow-api/tests/fixtures/github_releases_retrieve.json"
+            ))
+            .unwrap();
+            body["html_url"] = json!(format!("https://github.com/octocat/Hello-World/releases/{tag_name}"));
+
+            when.method(POST)
+                .path("/repos/octocat/Hello-World/releases")
+                .json_body(json!({
+                    "tag_name": tag_name,
+                    "target_commitish": head.to_string(),
+                    "name": title,
+                    "body": pkg.changelog_md,
+                    "make_latest": if make_latest { "true" } else { "false" },
+                }));
+            then.status(201).json_body(body);
+        }));
+    }
+
+    // Run the `release` command for the current commit.
+    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .current_dir(&project_dir)
+        .env("GITHUB_TOKEN", "test-token")
+        .arg("release")
+        .assert()
+        .success();
+
+    // Verify that the original branch, commit and clean working directory were preserved.
+    assert_eq!(repo.head().unwrap().shorthand().unwrap(), "main");
+    assert_eq!(repo.head().unwrap().target().unwrap(), head);
+    assert!(repo.statuses(None).unwrap().is_empty(), "uncommitted changes");
+
+    // Verify that a Git tag and release was created for each package.
+    commit_pulls_mock.assert_calls(1);
+    for mock in server_mocks {
+        mock.assert_calls(1);
+    }
+}
+
 /// Tests that the `release` command allows skipping the creation of additional major and minor Git tags.
 #[rstest]
 fn test_release_command_can_skip_major_and_minor_tags(#[with("example-rust")] project_repo: (TempDir, Repository)) {
@@ -276,13 +459,14 @@ fn test_release_command_can_skip_major_and_minor_tags(#[with("example-rust")] pr
 
     // Configure `git-reflow` by:
     // - Setting the GitHub host to the mock server's base URL;
+    // - Disabling commits via the GitHub API;
     // - Disabling the creation of additional major and minor Git tags.
     project_dir
         .child(".reflow.json")
         .write_str(
             &json!({
                 "git": {
-                    "provider": { "github": { "host": server.base_url() } },
+                    "provider": { "github": { "host": server.base_url(), "commit-via-api": false } },
                     "tag-major-and-minor": false, // NB: By default, this is `true`, so disable it for this test.
                 },
             })
@@ -493,10 +677,16 @@ fn test_release_command_with_dry_run(#[with("example-rust-workspace")] project_r
     let server = MockServer::start();
 
     // Configure `git-reflow` by:
-    // - Setting the GitHub host to the mock server's base URL.
+    // - Setting the GitHub host to the mock server's base URL;
+    // - Disabling commits via the GitHub API.
     project_dir
         .child(".reflow.json")
-        .write_str(&json!({"git": {"provider": {"github": {"host": server.base_url()}}}}).to_string())
+        .write_str(
+            &json!({
+                "git": { "provider": { "github": { "host": server.base_url(), "commit-via-api": false } } }
+            })
+            .to_string(),
+        )
         .unwrap();
 
     // Commit the current files to the `main` branch.

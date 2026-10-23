@@ -1035,7 +1035,7 @@ mod tests {
         assert_eq!(remote_branch.target(), Some(head));
     }
 
-    /// Tests that dry runs neither commit nor push changes for local and GitHub API commits.
+    /// Tests that dry runs neither commit nor push changes for local and API-driven commits.
     #[rstest]
     #[tokio::test]
     async fn test_commit_and_push_to_remote_with_dry_run(
