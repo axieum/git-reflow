@@ -34,5 +34,21 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
         "changelog_md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function"
       }
     ]
+  },
+  {
+    "number": 1347,
+    "url": "https://github.com/octocat/Hello-World/pull/1347",
+    "title": "chore(example-cli): release v1.0.1",
+    "body": "---\npackages:\n- name: example-cli\n  version: 1.0.1\n---\n\n## [1.0.1] - [DATE]\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0\n",
+    "head": "reflow--branches--main--example-cli",
+    "base": "main",
+    "existing": false,
+    "packages": [
+      {
+        "name": "example-cli",
+        "version": "1.0.1",
+        "changelog_md": "## [1.0.1] - [DATE]\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0"
+      }
+    ]
   }
 ]

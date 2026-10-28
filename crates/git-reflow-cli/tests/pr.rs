@@ -129,7 +129,24 @@ fn test_pr_command_creates_separate_pull_requests(
         server.mock(|when, then| {
             when.method(POST)
                 .path("/repos/octocat/Hello-World/pulls")
-                .body_includes("example-api");
+                .body_includes("reflow--branches--main--example-api");
+            then.status(201)
+                .header("content-type", "application/json")
+                .body(include_str!(
+                    "../../git-reflow-api/tests/fixtures/github_pulls_retrieve.json"
+                ));
+        }),
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/repos/octocat/Hello-World/pulls")
+                .query_param("head", "octocat:reflow--branches--main--example-cli")
+                .query_param("base", "main");
+            then.status(200).header("content-type", "application/json").body("[]");
+        }),
+        server.mock(|when, then| {
+            when.method(POST)
+                .path("/repos/octocat/Hello-World/pulls")
+                .body_includes("reflow--branches--main--example-cli");
             then.status(201)
                 .header("content-type", "application/json")
                 .body(include_str!(
@@ -190,12 +207,13 @@ fn test_pr_command_creates_separate_pull_requests(
     for branch in [
         "reflow--branches--main--example-rust-workspace",
         "reflow--branches--main--example-api",
+        "reflow--branches--main--example-cli",
     ] {
         assert!(remote_repo.find_reference(&format!("refs/heads/{}", branch)).is_ok());
     }
 
     // Verify that multiple pull requests were created for each release branch.
-    // NB: We expect two pull requests, since `separate_pull_requests` was enabled.
+    // NB: We expect three pull requests, including the dependent CLI package.
     for mock in server_mocks {
         mock.assert_calls(1);
     }
@@ -283,6 +301,8 @@ fn test_pr_command_commits_via_github_api(#[with("example-rust-workspace")] proj
                                 { "path": "Cargo.lock" },
                                 { "path": "crates/example-api/CHANGELOG.md" },
                                 { "path": "crates/example-api/Cargo.toml" },
+                                { "path": "crates/example-cli/CHANGELOG.md" },
+                                { "path": "crates/example-cli/Cargo.toml" },
                             ],
                             "deletions": [],
                         },
@@ -536,7 +556,9 @@ fn test_pr_command_with_dry_run(
     // NB: We expect one combined pull request, since `separate_pull_requests` is false by default.
 
     insta::with_settings!({ filters => INSTA_STDOUT_FILTERS }, {
-        insta::assert_snapshot!(String::from_utf8_lossy(&assert.get_output().stdout));
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(String::from_utf8_lossy(&assert.get_output().stdout));
+        }
     });
 }
 

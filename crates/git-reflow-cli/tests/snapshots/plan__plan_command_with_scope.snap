@@ -8,6 +8,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     "current-version": "1.0.0",
     "next-version": "1.1.0",
     "commit-message": "chore(example-api): release v1.1.0",
-    "changelog-md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function"
+    "changelog-md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function",
+    "dependencies": {}
   }
 ]

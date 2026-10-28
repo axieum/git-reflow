@@ -381,6 +381,7 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use rstest::rstest;
+    use std::collections::HashMap;
 
     /// Tests that a pull request body can be built from a list of a single package.
     #[test]
@@ -505,6 +506,7 @@ mod tests {
             next_version: Version::parse("1.1.0-rc.6").unwrap(),
             commit_message: "chore: release".to_string(),
             changelog_md: "Changelog".to_string(),
+            dependencies: HashMap::new(),
             context: serde_json::Value::Null,
         };
         let package = PullRequestPackage {

@@ -384,6 +384,7 @@ mod tests {
     use rstest::rstest;
     use semver::Version;
     use serde_json::json;
+    use std::collections::HashMap;
 
     /// Tests that a grouped release creates one pull request containing all package releases.
     #[rstest]
@@ -435,6 +436,7 @@ mod tests {
                     - *(api)* Add a `subtract` function
                     - *(cli)* Print subtractions"#}
                 .to_string(),
+                dependencies: HashMap::new(),
                 context: json!(null),
             },
             PackageRelease {
@@ -449,6 +451,7 @@ mod tests {
 
                     - *(api)* Add a `subtract` function"#}
                 .to_string(),
+                dependencies: HashMap::new(),
                 context: json!(null),
             },
             PackageRelease {
@@ -463,6 +466,7 @@ mod tests {
 
                     - *(cli)* Print subtractions"#}
                 .to_string(),
+                dependencies: HashMap::from([("example-api".to_string(), semver::Version::parse("0.2.0").unwrap())]),
                 context: json!(null),
             },
         ];
@@ -599,6 +603,7 @@ mod tests {
                     - *(api)* Add a `subtract` function
                     - *(cli)* Print subtractions"#}
                 .to_string(),
+                dependencies: HashMap::new(),
                 context: json!(null),
             },
             PackageRelease {
@@ -613,6 +618,7 @@ mod tests {
 
                     - *(api)* Add a `subtract` function"#}
                 .to_string(),
+                dependencies: HashMap::new(),
                 context: json!(null),
             },
             PackageRelease {
@@ -627,6 +633,7 @@ mod tests {
 
                     - *(cli)* Print subtractions"#}
                 .to_string(),
+                dependencies: HashMap::from([("example-api".to_string(), semver::Version::parse("0.2.0").unwrap())]),
                 context: json!(null),
             },
         ];
@@ -737,6 +744,7 @@ mod tests {
                 - *(api)* Add a `subtract` function
                 - *(cli)* Print subtractions"#}
             .to_string(),
+            dependencies: HashMap::new(),
             context: json!(null),
         }];
 

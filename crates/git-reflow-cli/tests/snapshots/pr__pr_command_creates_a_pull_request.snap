@@ -7,7 +7,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     "number": 1347,
     "url": "https://github.com/octocat/Hello-World/pull/1347",
     "title": "chore: release v1.1.0",
-    "body": "---\npackages:\n- name: example-rust-workspace\n  version: 1.1.0\n- name: example-api\n  version: 1.1.0\n---\n\n<details id=\"example-rust-workspace\">\n<summary>example-rust-workspace: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function</details>\n\n<details id=\"example-api\">\n<summary>example-api: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function</details>\n",
+    "body": "---\npackages:\n- name: example-rust-workspace\n  version: 1.1.0\n- name: example-api\n  version: 1.1.0\n- name: example-cli\n  version: 1.0.1\n---\n\n<details id=\"example-rust-workspace\">\n<summary>example-rust-workspace: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function</details>\n\n<details id=\"example-api\">\n<summary>example-api: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function</details>\n\n<details id=\"example-cli\">\n<summary>example-cli: v1.0.1</summary>\n\n## [1.0.1] - [DATE]\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0</details>\n",
     "head": "reflow--branches--main",
     "base": "main",
     "existing": false,
@@ -21,6 +21,11 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
         "name": "example-api",
         "version": "1.1.0",
         "changelog_md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function"
+      },
+      {
+        "name": "example-cli",
+        "version": "1.0.1",
+        "changelog_md": "## [1.0.1] - [DATE]\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0"
       }
     ]
   }

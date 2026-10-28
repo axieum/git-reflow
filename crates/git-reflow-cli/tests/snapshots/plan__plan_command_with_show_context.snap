@@ -9,6 +9,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     "next-version": "1.1.0",
     "commit-message": "chore: release v1.1.0",
     "changelog-md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function",
+    "dependencies": {},
     "context": {
       "azure_devops": {
         "contributors": []
@@ -157,6 +158,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     "next-version": "1.1.0",
     "commit-message": "chore(example-api): release v1.1.0",
     "changelog-md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function",
+    "dependencies": {},
     "context": {
       "azure_devops": {
         "contributors": []
@@ -297,6 +299,157 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       "submodule_commits": {},
       "timestamp": [COMMIT SHA],
       "version": "v1.1.0"
+    }
+  },
+  {
+    "package-name": "example-cli",
+    "current-version": "1.0.0",
+    "next-version": "1.0.1",
+    "commit-message": "chore(example-cli): release v1.0.1",
+    "changelog-md": "## [1.0.1] - [DATE]\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0",
+    "dependencies": {
+      "example-api": "1.1.0"
+    },
+    "context": {
+      "azure_devops": {
+        "contributors": []
+      },
+      "bitbucket": {
+        "contributors": []
+      },
+      "bump_type": "patch",
+      "commit_id": null,
+      "commit_range": {
+        "from": "",
+        "to": ""
+      },
+      "commits": [
+        {
+          "author": {
+            "email": null,
+            "name": null,
+            "timestamp": 0
+          },
+          "azure_devops": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "bitbucket": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "body": null,
+          "breaking": false,
+          "breaking_description": null,
+          "committer": {
+            "email": null,
+            "name": null,
+            "timestamp": 0
+          },
+          "conventional": true,
+          "extra": null,
+          "footers": [],
+          "gitea": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "github": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "gitlab": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "group": "<!-- 1 -->🐛 Bug Fixes",
+          "id": "",
+          "links": [],
+          "merge_commit": false,
+          "message": "update dependency `example-api` to v1.1.0",
+          "raw_message": "fix(deps): update dependency `example-api` to v1.1.0",
+          "scope": "deps",
+          "statistics": {
+            "additions": 0,
+            "deletions": 0,
+            "files_changed": 0
+          }
+        }
+      ],
+      "extra": null,
+      "gitea": {
+        "contributors": []
+      },
+      "github": {
+        "contributors": []
+      },
+      "gitlab": {
+        "contributors": []
+      },
+      "message": null,
+      "previous": {
+        "azure_devops": {
+          "contributors": []
+        },
+        "bitbucket": {
+          "contributors": []
+        },
+        "bump_type": null,
+        "commit_id": "[COMMIT SHA]",
+        "commit_range": null,
+        "commits": [],
+        "extra": null,
+        "gitea": {
+          "contributors": []
+        },
+        "github": {
+          "contributors": []
+        },
+        "gitlab": {
+          "contributors": []
+        },
+        "message": null,
+        "previous": null,
+        "repository": null,
+        "statistics": null,
+        "submodule_commits": {},
+        "timestamp": [COMMIT SHA],
+        "version": "v1.0.0"
+      },
+      "repository": null,
+      "statistics": {
+        "commit_count": 1,
+        "conventional_commit_count": 1,
+        "days_passed_since_last_release": 0,
+        "links": []
+      },
+      "submodule_commits": {},
+      "timestamp": [COMMIT SHA],
+      "version": "v1.0.1"
     }
   }
 ]

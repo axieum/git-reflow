@@ -49,7 +49,7 @@ impl CommandRunner for GitCliffRunner {
 /// # Arguments
 ///
 /// * `dir` - The path to scope the commits to.
-/// * `extra_commit` - An optional synthetic commit message, such as a dependency update.
+/// * `extra_commits` - A list of synthetic commit messages, such as dependency updates, if any.
 /// * `runner` - The `git-cliff` command runner.
 ///
 /// # Returns
@@ -57,7 +57,7 @@ impl CommandRunner for GitCliffRunner {
 /// A result containing the parsed `git-cliff` output context for unreleased changes.
 pub fn run_git_cliff(
     dir: &Path,
-    extra_commit: Option<&str>,
+    extra_commits: &[String],
     runner: Option<&dyn CommandRunner>,
 ) -> anyhow::Result<Option<Value>> {
     // Prepare `git-cliff` arguments.
@@ -67,7 +67,7 @@ pub fn run_git_cliff(
     };
     let include_path = include_path.to_string_lossy();
     let mut args = vec!["--include-path", &include_path, "--unreleased", "--bump", "--context"];
-    if let Some(message) = extra_commit {
+    for message in extra_commits {
         args.extend(["--with-commit", message]);
     }
     debug!("$ git-cliff {}", &args.join(" "));
@@ -253,19 +253,25 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, None, Some(&runner));
+        let result = run_git_cliff(&include_dir, &[], Some(&runner));
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.0.0"}));
     }
 
-    /// Tests that the JSON context from running `git-cliff` contains an extra commit message when provided.
+    /// Tests that each synthetic commit message is passed to `git-cliff` and returned in its context.
     #[test]
-    fn test_run_git_cliff_with_extra_commit() {
+    fn test_run_git_cliff_with_extra_commits() {
+        // Prepare the include path and synthetic dependency updates.
         let include_dir = Path::new("crates").join("pkg-a");
         let include_glob = include_dir.join("**").join("*");
-        let extra_commit = "fix(deps): update dependency api to v1.1.0";
+        let extra_commits = [
+            "fix(deps): update dependency `api` to v1.1.0".to_string(),
+            "fix(deps): update dependency `core` to v2.0.0".to_string(),
+        ];
 
+        // Expect a separate argument pair for each synthetic commit.
+        let expected_commits = extra_commits.clone();
         let mut runner = MockGitCliffRunner::new();
         runner
             .expect_run()
@@ -277,26 +283,32 @@ pub(crate) mod tests {
                     "--bump",
                     "--context",
                     "--with-commit",
-                    extra_commit,
+                    &expected_commits[0],
+                    "--with-commit",
+                    &expected_commits[1],
                 ]
             })
-            .returning(move |_, _| {
+            .returning(|_, _| {
                 Ok(Output {
                     status: std::process::ExitStatus::from_raw(0), // success
-                    stdout: r#"[{"version": "1.0.0", "commits": [{"raw_message": "fix(deps): update dependency api to v1.1.0"}]}]"#.as_bytes().to_vec(),
+                    stdout: r#"[{"version": "1.0.0", "commits": [{"raw_message": "fix(deps): update dependency `api` to v1.1.0"}, {"raw_message": "fix(deps): update dependency `core` to v2.0.0"}]}]"#.as_bytes().to_vec(),
                     stderr: vec![],
                 })
             });
 
-        let result = run_git_cliff(&include_dir, Some(extra_commit), Some(&runner));
+        // Run `git-cliff` with all synthetic commits.
+        let result = run_git_cliff(&include_dir, &extra_commits, Some(&runner));
 
+        // Verify that the returned context retains every synthetic commit exactly once.
         assert!(result.is_ok());
-        assert!(
+        assert_eq!(
             result.unwrap().unwrap()["commits"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|commit| commit["raw_message"] == extra_commit)
+                .map(|commit| commit["raw_message"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            extra_commits
         );
     }
 
@@ -326,7 +338,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, None, Some(&runner));
+        let result = run_git_cliff(&include_dir, &[], Some(&runner));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -358,7 +370,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, None, Some(&runner));
+        let result = run_git_cliff(&include_dir, &[], Some(&runner));
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "git-cliff error: something went wrong");
@@ -390,7 +402,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, None, Some(&runner));
+        let result = run_git_cliff(&include_dir, &[], Some(&runner));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -422,7 +434,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, None, Some(&runner));
+        let result = run_git_cliff(&include_dir, &[], Some(&runner));
 
         assert!(result.is_err());
         assert_eq!(
@@ -457,7 +469,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, None, Some(&runner));
+        let result = run_git_cliff(&include_dir, &[], Some(&runner));
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.0.0"}));
