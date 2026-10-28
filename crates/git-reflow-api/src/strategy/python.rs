@@ -1,9 +1,10 @@
-use crate::settings::pkg::PackageConfig;
+use crate::settings::{AppConfig, pkg::PackageConfig};
 use crate::strategy::{BaseStrategy, Strategy};
 use anyhow::{anyhow, bail};
 use regex::Regex;
 use semver::Version;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Value;
@@ -129,6 +130,76 @@ impl BaseStrategy for PythonStrategy {
         }
 
         Ok(vec![])
+    }
+
+    /// Finds the local dependencies of a Python package that are affected by:
+    ///
+    ///   * Checking `[project.dependencies]`;
+    ///   * Checking `[project.optional-dependencies]`;
+    ///   * Checking `[tool.poetry.dependencies]`;
+    ///   * Checking `[build-system.requires]`;
+    ///   * Excluding `[dependency-groups]` because they should not trigger a release.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The app configuration.
+    /// * `pkg_config` - The package configuration to find dependencies for.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of dependency package names, if any.
+    fn find_dependencies(&self, config: &AppConfig, pkg_config: &PackageConfig) -> anyhow::Result<Vec<String>> {
+        // Parse the `pyproject.toml` file of the package.
+        let filename = pkg_config.dir.join("pyproject.toml");
+        if !filename.try_exists()? {
+            debug!(
+                "a `pyproject.toml` file was not found at `{}`, skipping",
+                filename.display()
+            );
+            return Ok(vec![]);
+        }
+        let contents =
+            fs::read_to_string(&filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
+        let data: Value =
+            toml::from_str(&contents).map_err(|err| anyhow!("could not parse `{}`: {err}", filename.display()))?;
+
+        // Build a set of all dependency names.
+        let requirement_name = Regex::new(r"(?i)^\s*([a-z0-9][a-z0-9._-]*)(?:\s*(?:\[|[<>=!~(;@])|$)")?;
+        let dependencies = [("project", "dependencies"), ("build-system", "requires")]
+            .iter()
+            .filter_map(|(section, key)| data.get(section)?.get(key)?.as_array())
+            .flatten();
+        let optional_dependencies = data
+            .get("project")
+            .and_then(|project| project.get("optional-dependencies"))
+            .and_then(Value::as_table)
+            .into_iter()
+            .flat_map(|extras| extras.values())
+            .filter_map(Value::as_array)
+            .flatten();
+        let poetry_dependencies = data
+            .get("tool")
+            .and_then(|tool| tool.get("poetry"))
+            .and_then(|poetry| poetry.get("dependencies"))
+            .and_then(Value::as_table);
+        let dependency_names: HashSet<&str> = dependencies
+            .chain(optional_dependencies)
+            .filter_map(Value::as_str)
+            .filter_map(|requirement| requirement_name.captures(requirement)?.get(1).map(|name| name.as_str()))
+            .chain(
+                poetry_dependencies
+                    .into_iter()
+                    .flat_map(|deps| deps.keys().map(String::as_str)),
+            )
+            .collect();
+
+        // Return the dependency names that are also configured as packages.
+        Ok(config
+            .packages
+            .iter()
+            .filter(|pkg| dependency_names.contains(pkg.name()))
+            .map(|pkg| pkg.name().to_string())
+            .collect())
     }
 }
 
@@ -749,5 +820,50 @@ setup(name="foo", py_modules=["foo"])"#,
             result.unwrap_err().to_string(),
             format!("could not find `version` in `{}`", setup_py.display())
         );
+    }
+
+    /// Tests that dependencies of a Python package are found correctly.
+    #[rstest]
+    #[case::runtime("[project]\ndependencies = ['my-package>=1.0']", true)]
+    #[case::extras("[project]\ndependencies = ['my-package[cli]']", true)]
+    #[case::marker("[project]\ndependencies = ['my-package; python_version >= \"3.12\"']", true)]
+    #[case::url("[project]\ndependencies = ['my-package @ file:///packages/my-package']", true)]
+    #[case::optional("[project.optional-dependencies]\ncli = ['my-package']", true)]
+    #[case::dev("[dependency-groups]\ndev = ['my-package']", false)]
+    #[case::build("[build-system]\nrequires = ['my-package>=1.0']", true)]
+    #[case::poetry("[tool.poetry.dependencies]\nmy-package = '^1.0'", true)]
+    #[case::poetry_path(
+        "[tool.poetry.dependencies]\nmy-package = { path = '../my-package', optional = true }",
+        true
+    )]
+    #[case::poetry_dev("[tool.poetry.group.dev.dependencies]\nmy-package = '^1.0'", false)]
+    #[case::empty("[project]\nname = 'my-api'", false)]
+    #[case::out_of_scope("[project]\ndependencies = ['other-package>=1.0']", false)]
+    fn test_find_dependencies(strategy: PythonStrategy, #[case] manifest: &str, #[case] expected: bool) {
+        // Create a Python workspace with some packages and local dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let package = temp_dir.child("packages/my-api");
+        package.create_dir_all().unwrap();
+        package.child("pyproject.toml").write_str(manifest).unwrap();
+
+        // Create an app configuration for the workspace.
+        let config = AppConfig {
+            packages: vec![
+                PackageConfig {
+                    dir: package.path().to_path_buf(),
+                    name: Some("my-api".to_string()),
+                    ..Default::default()
+                },
+                PackageConfig {
+                    name: Some("my-package".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Find dependencies of `my-api`.
+        let dependencies = strategy.find_dependencies(&config, &config.packages[0]).unwrap();
+        assert_eq!(dependencies, if expected { vec!["my-package"] } else { vec![] });
     }
 }

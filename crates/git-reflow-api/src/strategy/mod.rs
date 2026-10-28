@@ -1,4 +1,4 @@
-use crate::settings::pkg::PackageConfig;
+use crate::settings::{AppConfig, pkg::PackageConfig};
 use crate::strategy::basic::BasicStrategy;
 use crate::strategy::python::PythonStrategy;
 use crate::strategy::rust::RustStrategy;
@@ -70,6 +70,18 @@ pub trait BaseStrategy {
     ///
     /// The package configurations if any.
     fn suggest_packages(&self, dir: &Path) -> anyhow::Result<Vec<PackageConfig>>;
+
+    /// Finds the local dependencies of a package (e.g. Cargo workspace) that are affected.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The app configuration.
+    /// * `pkg_config` - The package configuration to find dependencies for.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of dependency package names, if any.
+    fn find_dependencies(&self, config: &AppConfig, pkg_config: &PackageConfig) -> anyhow::Result<Vec<String>>;
 }
 
 impl BaseStrategy for Strategy {
@@ -99,6 +111,14 @@ impl BaseStrategy for Strategy {
             Strategy::Basic(strategy) => strategy.suggest_packages(dir),
             Strategy::Python(strategy) => strategy.suggest_packages(dir),
             Strategy::Rust(strategy) => strategy.suggest_packages(dir),
+        }
+    }
+
+    fn find_dependencies(&self, config: &AppConfig, pkg_config: &PackageConfig) -> anyhow::Result<Vec<String>> {
+        match self {
+            Strategy::Basic(strategy) => strategy.find_dependencies(config, pkg_config),
+            Strategy::Python(strategy) => strategy.find_dependencies(config, pkg_config),
+            Strategy::Rust(strategy) => strategy.find_dependencies(config, pkg_config),
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::settings::pkg::PackageConfig;
+use crate::settings::{AppConfig, pkg::PackageConfig};
 use crate::strategy::BaseStrategy;
 use anyhow::Context;
 use semver::Version;
@@ -62,6 +62,10 @@ impl BaseStrategy for BasicStrategy {
     }
 
     fn suggest_packages(&self, _dir: &Path) -> anyhow::Result<Vec<PackageConfig>> {
+        Ok(vec![])
+    }
+
+    fn find_dependencies(&self, _config: &AppConfig, _pkg_config: &PackageConfig) -> anyhow::Result<Vec<String>> {
         Ok(vec![])
     }
 }
