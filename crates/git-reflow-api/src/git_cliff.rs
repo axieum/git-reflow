@@ -49,24 +49,27 @@ impl CommandRunner for GitCliffRunner {
 /// # Arguments
 ///
 /// * `dir` - The path to scope the commits to.
+/// * `extra_commit` - An optional synthetic commit message, such as a dependency update.
 /// * `runner` - The `git-cliff` command runner.
 ///
 /// # Returns
 ///
 /// A result containing the parsed `git-cliff` output context for unreleased changes.
-pub fn run_git_cliff(dir: &Path, runner: Option<&dyn CommandRunner>) -> anyhow::Result<Option<Value>> {
+pub fn run_git_cliff(
+    dir: &Path,
+    extra_commit: Option<&str>,
+    runner: Option<&dyn CommandRunner>,
+) -> anyhow::Result<Option<Value>> {
     // Prepare `git-cliff` arguments.
     let include_path = match dir.to_str() {
         Some(".") => Path::new("**").join("*"), // git-cliff would reject `./**/*`
         _ => dir.join("**").join("*"),
     };
-    let args = [
-        "--include-path",
-        &include_path.to_string_lossy(),
-        "--unreleased",
-        "--bump",
-        "--context",
-    ];
+    let include_path = include_path.to_string_lossy();
+    let mut args = vec!["--include-path", &include_path, "--unreleased", "--bump", "--context"];
+    if let Some(message) = extra_commit {
+        args.extend(["--with-commit", message]);
+    }
     debug!("$ git-cliff {}", &args.join(" "));
 
     // Invoke the `git-cliff` command.
@@ -250,10 +253,51 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, Some(&runner));
+        let result = run_git_cliff(&include_dir, None, Some(&runner));
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.0.0"}));
+    }
+
+    /// Tests that the JSON context from running `git-cliff` contains an extra commit message when provided.
+    #[test]
+    fn test_run_git_cliff_with_extra_commit() {
+        let include_dir = Path::new("crates").join("pkg-a");
+        let include_glob = include_dir.join("**").join("*");
+        let extra_commit = "fix(deps): update dependency api to v1.1.0";
+
+        let mut runner = MockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, _| {
+                args == [
+                    "--include-path",
+                    &include_glob.to_string_lossy(),
+                    "--unreleased",
+                    "--bump",
+                    "--context",
+                    "--with-commit",
+                    extra_commit,
+                ]
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0), // success
+                    stdout: r#"[{"version": "1.0.0", "commits": [{"raw_message": "fix(deps): update dependency api to v1.1.0"}]}]"#.as_bytes().to_vec(),
+                    stderr: vec![],
+                })
+            });
+
+        let result = run_git_cliff(&include_dir, Some(extra_commit), Some(&runner));
+
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().unwrap()["commits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|commit| commit["raw_message"] == extra_commit)
+        );
     }
 
     /// Tests that an empty JSON context from running `git-cliff` is handled gracefully.
@@ -282,7 +326,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, Some(&runner));
+        let result = run_git_cliff(&include_dir, None, Some(&runner));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -314,7 +358,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, Some(&runner));
+        let result = run_git_cliff(&include_dir, None, Some(&runner));
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "git-cliff error: something went wrong");
@@ -346,7 +390,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, Some(&runner));
+        let result = run_git_cliff(&include_dir, None, Some(&runner));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -378,7 +422,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, Some(&runner));
+        let result = run_git_cliff(&include_dir, None, Some(&runner));
 
         assert!(result.is_err());
         assert_eq!(
@@ -413,7 +457,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, Some(&runner));
+        let result = run_git_cliff(&include_dir, None, Some(&runner));
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.0.0"}));
