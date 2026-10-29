@@ -8,6 +8,7 @@ use crate::provider::{BaseGitProvider, GitProvider, PullRequest, PullRequestPack
 use crate::settings::AppConfig;
 use crate::strategy::BaseStrategy;
 use anyhow::{Context, anyhow, ensure};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tracing::{debug, trace, warn};
 
@@ -78,7 +79,7 @@ pub async fn apply_release_plan(
         }
 
         // Write the changes to the package files.
-        let mut changed_files = Vec::new();
+        let mut changed_files = HashSet::new();
         for (j, release) in releases.iter().enumerate() {
             // Trace the package release being applied.
             if releases.len() > 1 {
@@ -196,24 +197,30 @@ pub async fn apply_release_plan(
 ///
 /// # Returns
 ///
-/// A result containing a list of the changed file paths.
+/// A result containing a set of the changed file paths.
 pub async fn write_package_release(
     config: &AppConfig,
     release: &PackageRelease,
     dry_run: bool,
-) -> anyhow::Result<Vec<PathBuf>> {
+) -> anyhow::Result<HashSet<PathBuf>> {
     // Look up the package configuration.
     let package = config
         .get_package(&release.package_name)
         .ok_or_else(|| anyhow!("package `{}` is not configured", release.package_name))?;
 
     // Track the changed files for this package release, so that they can be committed later.
-    let mut changed_files: Vec<PathBuf> = Vec::new();
+    let mut changed_files: HashSet<PathBuf> = HashSet::new();
 
     // Write the version to the package manifest file/s.
     let manifest_paths = package
         .strategy()
         .write_version(&release.next_version, package, dry_run)?;
+    changed_files.extend(manifest_paths);
+
+    // Update any dependencies in the package manifest file/s that are being released in this plan.
+    let manifest_paths = package
+        .strategy()
+        .write_dependency_versions(&release.dependencies, package, dry_run)?;
     changed_files.extend(manifest_paths);
 
     // Write the changelog Markdown to the changelog file, if it is configured.
@@ -224,7 +231,7 @@ pub async fn write_package_release(
         } else {
             debug!("write changelog to `{}` (dry run)", changelog_path.display());
         }
-        changed_files.push(changelog_path);
+        changed_files.insert(changelog_path);
     }
 
     Ok(changed_files)

@@ -121,3 +121,37 @@ pub fn add_origin_remote(
 
     (temp_dir, remote_repo)
 }
+
+/// Returns the full Git patch for a commit against its first parent, including binary changes.
+///
+/// # Arguments
+///
+/// * `repo` - The repository containing the commit.
+/// * `commit` - The commit to compare against its first parent.
+///
+/// # Returns
+///
+/// The full Git patch for the commit, including binary changes.
+pub fn commit_patch(repo: &Repository, commit: &git2::Commit<'_>) -> String {
+    // Compare the commit against its first parent to generate a diff.
+    let diff = repo
+        .diff_tree_to_tree(
+            Some(&commit.parent(0).unwrap().tree().unwrap()),
+            Some(&commit.tree().unwrap()),
+            Some(git2::DiffOptions::new().show_binary(true)),
+        )
+        .unwrap();
+
+    // Emit the diff as a patch, including binary changes.
+    let mut patch = Vec::new();
+    diff.print(git2::DiffFormat::Patch, |_, _, line| {
+        if matches!(line.origin(), '+' | '-' | ' ') {
+            patch.push(line.origin() as u8);
+        }
+        patch.extend_from_slice(line.content());
+        true
+    })
+    .unwrap();
+
+    String::from_utf8(patch).unwrap()
+}

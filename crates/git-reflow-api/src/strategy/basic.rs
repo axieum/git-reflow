@@ -2,6 +2,7 @@ use crate::settings::{AppConfig, pkg::PackageConfig};
 use crate::strategy::BaseStrategy;
 use anyhow::Context;
 use semver::Version;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
@@ -38,6 +39,15 @@ impl BaseStrategy for BasicStrategy {
             debug!("write `v{}` to `{}` (dry run)", new_version, path.display());
         }
         Ok(vec![path])
+    }
+
+    fn write_dependency_versions(
+        &self,
+        _versions: &HashMap<String, Version>,
+        _config: &PackageConfig,
+        _dry_run: bool,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        Ok(vec![])
     }
 
     /// Suggests the package name from the directory name.

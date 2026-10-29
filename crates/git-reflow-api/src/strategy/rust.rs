@@ -3,12 +3,12 @@ use crate::strategy::{BaseStrategy, Strategy};
 use anyhow::{Context, anyhow, bail};
 use semver::Version;
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Value;
 use toml_edit::{DocumentMut, Item};
-use tracing::debug;
+use tracing::{debug, trace};
 
 /// The [Rust](https://www.rust-lang.org/) release strategy.
 #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -48,6 +48,46 @@ impl BaseStrategy for RustStrategy {
             )?;
             return Ok(vec![cargo_toml_path, cargo_lock_path]);
         }
+        Ok(vec![])
+    }
+
+    /// Writes new dependency versions to the `Cargo.toml` and `Cargo.lock` files.
+    ///
+    /// Dependencies without an explicit version are left unchanged.
+    ///
+    /// # Arguments
+    ///
+    /// * `versions` - A map of dependency names to their new versions.
+    /// * `config` - The package configuration.
+    /// * `dry_run` - If true, do not actually write the changes.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of the changed file paths.
+    fn write_dependency_versions(
+        &self,
+        versions: &HashMap<String, Version>,
+        config: &PackageConfig,
+        dry_run: bool,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        // Short-circuit when there are no dependency versions to update.
+        if versions.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Update the `Cargo.toml` file.
+        let cargo_toml_path = config.dir.join("Cargo.toml");
+        if Self::write_dependency_versions_to_cargo_toml(&cargo_toml_path, versions, dry_run)? {
+            // Update the `Cargo.lock` file.
+            let cargo_lock_path = Self::write_dependency_versions_to_cargo_lock(
+                &std::env::current_dir()?,
+                &config.dir,
+                versions,
+                dry_run,
+            )?;
+            return Ok(vec![cargo_toml_path, cargo_lock_path]);
+        }
+
         Ok(vec![])
     }
 
@@ -289,6 +329,174 @@ impl RustStrategy {
         Ok(lockfile)
     }
 
+    /// Writes new dependency versions to the given `Cargo.toml` file.
+    ///
+    /// # Arguments
+    ///
+    /// * `filename` - The path to the `Cargo.toml` file.
+    /// * `versions` - A map of dependency names to their new versions.
+    /// * `dry_run` - If true, do not actually write the changes.
+    ///
+    /// # Returns
+    ///
+    /// A result of whether any updates were made.
+    fn write_dependency_versions_to_cargo_toml(
+        filename: &Path,
+        versions: &HashMap<String, Version>,
+        dry_run: bool,
+    ) -> anyhow::Result<bool> {
+        // Parse the `Cargo.toml` file.
+        let contents =
+            fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
+        let mut data = contents
+            .parse::<DocumentMut>()
+            .map_err(|err| anyhow!("could not parse `{}`: {err}", filename.display()))?;
+
+        // Update the dependency versions in the `Cargo.toml` file and write it back if any changes were made.
+        let changed = Self::update_dependency_tables(data.as_table_mut(), versions, filename);
+        if changed {
+            if !dry_run {
+                debug!("write dependency versions to `{}`", filename.display());
+                fs::write(filename, data.to_string())
+                    .map_err(|err| anyhow!("failed to write dependency versions to `{}`: {err}", filename.display()))?;
+            } else {
+                debug!("write dependency versions to `{}` (dry run)", filename.display());
+            }
+        }
+
+        Ok(changed)
+    }
+
+    /// Writes new dependency versions to the given `Cargo.lock` file.
+    ///
+    /// # Arguments
+    ///
+    /// * `root` - The root directory.
+    /// * `dir` - The package directory.
+    /// * `versions` - A map of dependency names to their new versions.
+    /// * `dry_run` - If true, do not actually write the changes.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the path to the updated `Cargo.lock` file.
+    fn write_dependency_versions_to_cargo_lock(
+        root: &Path,
+        dir: &Path,
+        versions: &HashMap<String, Version>,
+        dry_run: bool,
+    ) -> anyhow::Result<PathBuf> {
+        // Parse the `Cargo.lock` file.
+        let lockfile = Self::find_cargo_lock(dir, root)?;
+        let lockfile_display = lockfile.strip_prefix(root)?.display();
+        let contents =
+            fs::read_to_string(&lockfile).map_err(|err| anyhow!("could not read `{lockfile_display}`: {err}"))?;
+        let mut data = contents
+            .parse::<DocumentMut>()
+            .map_err(|err| anyhow!("could not parse `{lockfile_display}`: {err}"))?;
+
+        // Update the dependency versions in the `Cargo.lock` file.
+        let mut changed = false;
+        if let Some(packages) = data.get_mut("package").and_then(Item::as_array_of_tables_mut) {
+            for package in packages.iter_mut() {
+                // Check if the dependency has a version to be updated.
+                let Some(version) = package
+                    .get("name")
+                    .and_then(Item::as_str)
+                    .and_then(|name| versions.get(name))
+                else {
+                    continue;
+                };
+
+                // Update the dependency to the new version.
+                let new_version = version.to_string();
+                if package.get("version").and_then(Item::as_str) != Some(new_version.as_str()) {
+                    debug!("set lockfile dependency version to `{version}` at `{lockfile_display}`");
+                    package["version"] = toml_edit::value(new_version);
+                    changed = true;
+                }
+            }
+        }
+
+        // Write the `Cargo.lock` file back if any changes were made.
+        if changed {
+            if !dry_run {
+                debug!("write dependency versions to `{lockfile_display}`");
+                fs::write(&lockfile, data.to_string())
+                    .map_err(|err| anyhow!("failed to write dependency versions to `{lockfile_display}`: {err}"))?;
+            } else {
+                debug!("write dependency versions to `{lockfile_display}` (dry run)");
+            }
+        }
+
+        Ok(lockfile)
+    }
+
+    /// Updates dependency versions in nested `Cargo.toml` tables.
+    ///
+    /// # Arguments
+    ///
+    /// * `table` - The TOML table to update.
+    /// * `versions` - A map of dependency names to their new versions.
+    /// * `filename` - The path to the TOML file being updated (for logging).
+    ///
+    /// # Returns
+    ///
+    /// Whether any dependency versions were updated in the table.
+    fn update_dependency_tables(
+        table: &mut dyn toml_edit::TableLike,
+        versions: &HashMap<String, Version>,
+        filename: &Path,
+    ) -> bool {
+        let mut changed = false;
+        for (key, item) in table.iter_mut() {
+            // Descend through workspace and target tables until a dependency table is reached.
+            let Some(table) = item.as_table_like_mut() else {
+                continue;
+            };
+            if !matches!(key.get(), "dependencies" | "dev-dependencies" | "build-dependencies") {
+                changed |= Self::update_dependency_tables(table, versions, filename);
+                continue;
+            }
+
+            // For each dependency, check if it is in scope and update its version if necessary.
+            for (name, dependency) in table.iter_mut() {
+                // Check if the dependency has a version to be updated.
+                let package_name = dependency.get("package").and_then(Item::as_str).unwrap_or(name.get());
+                let Some(version) = versions.get(package_name) else {
+                    continue;
+                };
+
+                // If the dependency is a string, update it directly, otherwise update the `version` field in the table.
+                let version_item = if dependency.is_str() {
+                    Some(&mut *dependency)
+                } else {
+                    dependency.get_mut("version")
+                };
+
+                // Skip dependencies that do not specify a version, i.e. are path-only or workspace-inherited.
+                let Some(value) = version_item.and_then(Item::as_value_mut).filter(|value| value.is_str()) else {
+                    trace!("skip dependency `{name}` without a version at `{}`", filename.display());
+                    continue;
+                };
+
+                // Update the dependency to the new version.
+                let new_version = version.to_string();
+                if value.as_str() != Some(new_version.as_str()) {
+                    debug!(
+                        "set dependency `{name}` version to `{version}` at `{}`",
+                        filename.display(),
+                    );
+                    let mut replacement = toml_edit::Value::from(new_version);
+                    *replacement.decor_mut() = value.decor().clone();
+                    *value = replacement;
+                    changed = true;
+                }
+            }
+        }
+
+        changed
+    }
+
     /// Finds the closest `Cargo.lock` file from a given package directory upwards.
     ///
     /// This will not traverse any further than the given `relative` directory.
@@ -338,6 +546,7 @@ struct CargoPackageToml {
 mod tests {
     use super::*;
     use assert_fs::prelude::*;
+    use indoc::indoc;
     use rstest::{fixture, rstest};
 
     /// A test fixture for a default Rust strategy.
@@ -348,7 +557,7 @@ mod tests {
 
     /// Tests that the suggested name for a directory is extracted from the `Cargo.toml`.
     #[rstest]
-    fn suggest_name_from_cargo_toml(strategy: RustStrategy) {
+    fn test_suggest_name_from_cargo_toml(strategy: RustStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         temp_dir
             .child("Cargo.toml")
@@ -360,7 +569,7 @@ mod tests {
 
     /// Tests that the suggested name for a directory is the folder when `Cargo.toml` is workspace.
     #[rstest]
-    fn suggest_name_from_cargo_toml_workspace(strategy: RustStrategy) {
+    fn test_suggest_name_from_cargo_toml_workspace(strategy: RustStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         temp_dir
             .child("Cargo.toml")
@@ -379,7 +588,7 @@ mod tests {
 
     /// Tests that the suggested name for a directory is not extracted from a malformed `Cargo.toml`.
     #[rstest]
-    fn suggest_name_from_malformed_cargo_toml(strategy: RustStrategy) {
+    fn test_suggest_name_from_malformed_cargo_toml(strategy: RustStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         temp_dir.child("Cargo.toml").write_str("[package]").unwrap();
 
@@ -391,7 +600,7 @@ mod tests {
 
     /// Tests that the suggested name for a directory cannot be extracted if no `Cargo.toml` file exists.
     #[rstest]
-    fn suggest_name_from_missing_cargo_toml(strategy: RustStrategy) {
+    fn test_suggest_name_from_missing_cargo_toml(strategy: RustStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
 
         let err = strategy.suggest_name(&temp_dir).unwrap_err();
@@ -401,7 +610,7 @@ mod tests {
 
     /// Tests that there are no suggested packages for a non-workspace Cargo project.
     #[rstest]
-    fn suggest_packages(strategy: RustStrategy) {
+    fn test_suggest_packages(strategy: RustStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         temp_dir
             .child("Cargo.toml")
@@ -413,7 +622,7 @@ mod tests {
 
     /// Tests that members from a Cargo workspace are suggested as packages.
     #[rstest]
-    fn suggest_packages_with_cargo_workspace(strategy: RustStrategy) {
+    fn test_suggest_packages_with_cargo_workspace(strategy: RustStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let crate_a = temp_dir.child("crates/a");
         let crate_b = temp_dir.child("crates/b");
@@ -456,7 +665,7 @@ mod tests {
 
     /// Tests that a new version is written to a given `Cargo.toml` file.
     #[rstest]
-    fn write_version_to_cargo_toml() {
+    fn test_write_version_to_cargo_toml() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let cargo_toml = temp_dir.child("Cargo.toml");
         cargo_toml
@@ -471,7 +680,7 @@ mod tests {
 
     /// Tests that a new version is *not* written to a Cargo workspace `Cargo.toml` file.
     #[rstest]
-    fn write_version_to_cargo_toml_with_workspace() {
+    fn test_write_version_to_cargo_toml_with_workspace() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let cargo_toml = temp_dir.child("Cargo.toml");
         cargo_toml
@@ -486,7 +695,7 @@ mod tests {
 
     /// Tests that a new version is *not* written to a given `Cargo.toml` file when performing a dry run.
     #[rstest]
-    fn write_version_to_cargo_toml_with_dry_run() {
+    fn test_write_version_to_cargo_toml_with_dry_run() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let cargo_toml = temp_dir.child("Cargo.toml");
         cargo_toml
@@ -502,7 +711,7 @@ mod tests {
 
     /// Tests that a new version is written to a package's `Cargo.lock` file.
     #[rstest]
-    fn write_version_to_cargo_lock() {
+    fn test_write_version_to_cargo_lock() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let lockfile = temp_dir.child("Cargo.lock");
         let crate_a = temp_dir.child("crates/a");
@@ -519,7 +728,7 @@ mod tests {
 
     /// Tests that a new version for an unknown package cannot be written to a `Cargo.lock` file.
     #[rstest]
-    fn write_version_to_cargo_lock_with_unknown_package() {
+    fn test_write_version_to_cargo_lock_with_unknown_package() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let lockfile = temp_dir.child("Cargo.lock");
         lockfile.write_str("# This file is automatically @generated by Cargo.\n[[package]]\nname = \"crate-a\"\nversion = \"1.0.0\"").unwrap();
@@ -535,7 +744,7 @@ mod tests {
 
     /// Tests that a new version is *not* written to a package's `Cargo.lock` file when performing a dry run.
     #[rstest]
-    fn write_version_to_cargo_lock_with_dry_run() {
+    fn test_write_version_to_cargo_lock_with_dry_run() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let lockfile = temp_dir.child("Cargo.lock");
         let crate_a = temp_dir.child("crates/a");
@@ -549,6 +758,440 @@ mod tests {
         lockfile.assert(
             "# This file is automatically @generated by Cargo.\n[[package]]\nname = \"crate-a\"\nversion = \"1.0.0\"\n",
         );
+    }
+
+    /// Tests that new dependency versions are written to the `Cargo.toml` and `Cargo.lock` files.
+    #[rstest]
+    fn test_write_dependency_versions(strategy: RustStrategy) {
+        // Create a Rust crate with some local dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+        let cargo_toml = temp_dir.child("Cargo.toml");
+        cargo_toml
+            .write_str(indoc! {r#"
+                [package]
+                name = "magic"
+                version = "1.0.0"
+
+                [dependencies]
+                api = { path = "../api" }
+                core = { path = "../core", version = "1.0.0" }
+
+                [build-dependencies]
+                build = "^1.0.0"
+                "#})
+            .unwrap();
+        let cargo_lock = temp_dir.child("Cargo.lock");
+        cargo_lock
+            .write_str(indoc! {r#"
+                # This file is automatically @generated by Cargo.
+                # It is not intended for manual editing.
+                version = 4
+
+                [[package]]
+                name = "api"
+                version = "1.0.0"
+
+                [[package]]
+                name = "build"
+                version = "1.0.0"
+
+                [[package]]
+                name = "core"
+                version = "1.0.0"
+                dependencies = [
+                 "example-api",
+                ]
+            "#})
+            .unwrap();
+
+        // Build a package configuration for the crate.
+        let config = PackageConfig {
+            dir: temp_dir.path().to_path_buf(),
+            name: Some("magic".to_string()),
+            ..Default::default()
+        };
+
+        // Write new dependency versions.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("build".to_string(), Version::new(1, 2, 0)),
+            ("core".to_string(), Version::new(1, 1, 0)),
+        ]);
+        let result = strategy.write_dependency_versions(&versions, &config, false);
+
+        // Verify that the new versions were written correctly.
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            vec![cargo_toml.to_path_buf(), cargo_lock.to_path_buf()]
+        );
+        cargo_toml.assert(indoc! {r#"
+            [package]
+            name = "magic"
+            version = "1.0.0"
+
+            [dependencies]
+            api = { path = "../api" }
+            core = { path = "../core", version = "1.1.0" }
+
+            [build-dependencies]
+            build = "1.2.0"
+            "#});
+        cargo_lock.assert(indoc! {r#"
+            # This file is automatically @generated by Cargo.
+            # It is not intended for manual editing.
+            version = 4
+
+            [[package]]
+            name = "api"
+            version = "1.1.0"
+
+            [[package]]
+            name = "build"
+            version = "1.2.0"
+
+            [[package]]
+            name = "core"
+            version = "1.1.0"
+            dependencies = [
+             "example-api",
+            ]
+        "#});
+    }
+
+    /// Tests that new dependency versions are *not* written when performing a dry run.
+    #[rstest]
+    fn test_write_dependency_versions_with_dry_run(strategy: RustStrategy) {
+        // Create a Rust crate with some local dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+        let cargo_toml = temp_dir.child("Cargo.toml");
+        let cargo_toml_contents = indoc! {r#"
+            [package]
+            name = "magic"
+            version = "1.0.0"
+
+            [dependencies]
+            api = { path = "../api" }
+            core = { path = "../core", version = "1.0.0" }
+
+            [build-dependencies]
+            build = "^1.0.0"
+            "#};
+        cargo_toml.write_str(cargo_toml_contents).unwrap();
+        let cargo_lock = temp_dir.child("Cargo.lock");
+        let cargo_lock_contents = indoc! {r#"
+            # This file is automatically @generated by Cargo.
+            # It is not intended for manual editing.
+            version = 4
+
+            [[package]]
+            name = "api"
+            version = "1.0.0"
+
+            [[package]]
+            name = "build"
+            version = "1.0.0"
+
+            [[package]]
+            name = "core"
+            version = "1.0.0"
+            dependencies = [
+             "example-api",
+            ]
+            "#};
+        cargo_lock.write_str(cargo_lock_contents).unwrap();
+
+        // Build a package configuration for the crate.
+        let config = PackageConfig {
+            dir: temp_dir.path().to_path_buf(),
+            name: Some("magic".to_string()),
+            ..Default::default()
+        };
+
+        // Write new dependency versions.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("build".to_string(), Version::new(1, 2, 0)),
+            ("core".to_string(), Version::new(1, 1, 0)),
+        ]);
+        let result = strategy.write_dependency_versions(&versions, &config, true);
+
+        // Verify that the new versions were reported as written, but the files were not actually modified.
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            vec![cargo_toml.to_path_buf(), cargo_lock.to_path_buf()]
+        );
+        cargo_toml.assert(cargo_toml_contents);
+        cargo_lock.assert(cargo_lock_contents);
+    }
+
+    /// Tests that an empty map of dependency versions causes a short-circuit and no files are written.
+    #[rstest]
+    fn test_write_dependency_versions_with_no_dependencies(strategy: RustStrategy) {
+        // Create a Rust crate.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+
+        // Build a package configuration for the crate.
+        let config = PackageConfig {
+            dir: temp_dir.path().to_path_buf(),
+            name: Some("magic".to_string()),
+            ..Default::default()
+        };
+
+        // Write new dependency versions with an empty map.
+        let result = strategy.write_dependency_versions(&HashMap::new(), &config, false);
+
+        // Verify that no files were written.
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    /// Tests that new dependency versions are written to the `Cargo.toml` file.
+    #[rstest]
+    fn test_write_dependency_versions_to_cargo_toml() {
+        // Create a Rust crate with some dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let cargo_toml = temp_dir.child("Cargo.toml");
+        let contents = indoc! {r#"
+            [package]
+            name = "magic"
+            version = "1.0.0"
+
+            [dependencies]
+            api = { path = "../api" }
+            core = { path = "../core", version = "1.0.0", features = ["extra"] }
+            other = "1.0.0"
+            inherited = { workspace = true }
+            alias = { package = "renamed", version = "1.0.0" }
+
+            [dev-dependencies]
+            test = "1.0.0"
+
+            [build-dependencies]
+            build = "^1.0.0"
+
+            [target.'cfg(unix)'.dependencies]
+            core = "1.0.0"
+
+            [workspace.dependencies]
+            core = { version = "1.0.0", path = "../core" }
+
+            [dependencies.expanded]
+            version = "1.0.0" # Keep this comment.
+            path = "../expanded"
+            "#};
+        cargo_toml.write_str(contents).unwrap();
+
+        // Write new dependency versions.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("core".to_string(), Version::new(1, 2, 0)),
+            ("inherited".to_string(), Version::new(1, 1, 0)),
+            ("renamed".to_string(), Version::new(2, 0, 0)),
+            ("test".to_string(), Version::new(1, 3, 0)),
+            ("build".to_string(), Version::new(1, 4, 0)),
+            ("expanded".to_string(), Version::new(1, 5, 0)),
+        ]);
+        let result = RustStrategy::write_dependency_versions_to_cargo_toml(&cargo_toml, &versions, false);
+
+        // Verify that only matching, explicitly versioned dependencies were changed.
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        cargo_toml.assert(indoc! {r#"
+            [package]
+            name = "magic"
+            version = "1.0.0"
+
+            [dependencies]
+            api = { path = "../api" }
+            core = { path = "../core", version = "1.2.0", features = ["extra"] }
+            other = "1.0.0"
+            inherited = { workspace = true }
+            alias = { package = "renamed", version = "2.0.0" }
+
+            [dev-dependencies]
+            test = "1.3.0"
+
+            [build-dependencies]
+            build = "1.4.0"
+
+            [target.'cfg(unix)'.dependencies]
+            core = "1.2.0"
+
+            [workspace.dependencies]
+            core = { version = "1.2.0", path = "../core" }
+
+            [dependencies.expanded]
+            version = "1.5.0" # Keep this comment.
+            path = "../expanded"
+            "#});
+
+        // Reapplying persisted versions must not report any further manifest changes.
+        assert!(!RustStrategy::write_dependency_versions_to_cargo_toml(&cargo_toml, &versions, false).unwrap());
+    }
+
+    /// Tests that new dependency versions are *not* written to `Cargo.toml` when performing a dry run.
+    #[rstest]
+    fn test_write_dependency_versions_to_cargo_toml_with_dry_run() {
+        // Create a Rust crate with some dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let cargo_toml = temp_dir.child("Cargo.toml");
+        let contents = indoc! {r#"
+            [package]
+            name = "magic"
+            version = "1.0.0"
+
+            [dependencies]
+            api = { path = "../api" }
+            core = { path = "../core", version = "1.0.0", features = ["extra"] }
+            other = "1.0.0"
+            inherited = { workspace = true }
+            alias = { package = "renamed", version = "1.0.0" }
+
+            [dev-dependencies]
+            test = "1.0.0"
+
+            [build-dependencies]
+            build = "^1.0.0"
+
+            [target.'cfg(unix)'.dependencies]
+            core = "1.0.0"
+
+            [workspace.dependencies]
+            core = { version = "1.0.0", path = "../core" }
+
+            [dependencies.expanded]
+            version = "1.0.0" # Keep this comment.
+            path = "../expanded"
+            "#};
+        cargo_toml.write_str(contents).unwrap();
+
+        // Write new dependency versions with dry run.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("core".to_string(), Version::new(1, 2, 0)),
+            ("inherited".to_string(), Version::new(1, 1, 0)),
+            ("renamed".to_string(), Version::new(2, 0, 0)),
+            ("test".to_string(), Version::new(1, 3, 0)),
+            ("build".to_string(), Version::new(1, 4, 0)),
+            ("expanded".to_string(), Version::new(1, 5, 0)),
+        ]);
+        let result = RustStrategy::write_dependency_versions_to_cargo_toml(&cargo_toml, &versions, true);
+
+        // Verify that the file was reported as changed, but the contents were not actually modified.
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        cargo_toml.assert(contents);
+    }
+
+    /// Tests that new dependency versions are written to the `Cargo.lock` file.
+    #[rstest]
+    fn test_write_dependency_versions_to_cargo_lock() {
+        // Create a Rust workspace with some dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let crate_dir = temp_dir.child("crates/magic");
+        crate_dir.create_dir_all().unwrap();
+        let cargo_lock = temp_dir.child("Cargo.lock");
+        let contents = indoc! {r#"
+            # This file is automatically @generated by Cargo.
+            # It is not intended for manual editing.
+            version = 4
+
+            [[package]]
+            name = "api"
+            version = "1.0.0"
+
+            [[package]]
+            name = "core"
+            version = "1.0.0"
+            dependencies = [
+             "api",
+            ]
+
+            [[package]]
+            name = "other"
+            version = "1.0.0"
+            "#};
+        cargo_lock.write_str(contents).unwrap();
+
+        // Write new dependency versions.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("core".to_string(), Version::new(1, 2, 0)),
+            ("missing".to_string(), Version::new(2, 0, 0)),
+        ]);
+        let result = RustStrategy::write_dependency_versions_to_cargo_lock(&temp_dir, &crate_dir, &versions, false);
+
+        // Verify that the new dependency versions were written correctly.
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), cargo_lock.to_path_buf());
+        cargo_lock.assert(indoc! {r#"
+            # This file is automatically @generated by Cargo.
+            # It is not intended for manual editing.
+            version = 4
+
+            [[package]]
+            name = "api"
+            version = "1.1.0"
+
+            [[package]]
+            name = "core"
+            version = "1.2.0"
+            dependencies = [
+             "api",
+            ]
+
+            [[package]]
+            name = "other"
+            version = "1.0.0"
+            "#});
+    }
+
+    /// Tests that new dependency versions are *not* written to `Cargo.lock` when performing a dry run.
+    #[rstest]
+    fn test_write_dependency_versions_to_cargo_lock_with_dry_run() {
+        // Create a Rust workspace with some dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let crate_dir = temp_dir.child("crates/magic");
+        crate_dir.create_dir_all().unwrap();
+        let cargo_lock = temp_dir.child("Cargo.lock");
+        let contents = indoc! {r#"
+            # This file is automatically @generated by Cargo.
+            # It is not intended for manual editing.
+            version = 4
+
+            [[package]]
+            name = "api"
+            version = "1.0.0"
+
+            [[package]]
+            name = "core"
+            version = "1.0.0"
+            dependencies = [
+             "api",
+            ]
+
+            [[package]]
+            name = "other"
+            version = "1.0.0"
+            "#};
+        cargo_lock.write_str(contents).unwrap();
+
+        // Write new dependency versions with dry run.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("core".to_string(), Version::new(1, 2, 0)),
+            ("missing".to_string(), Version::new(2, 0, 0)),
+        ]);
+        let result = RustStrategy::write_dependency_versions_to_cargo_lock(&temp_dir, &crate_dir, &versions, true);
+
+        // Verify that the file was reported as changed, but the contents were not actually modified.
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), cargo_lock.to_path_buf());
+        cargo_lock.assert(contents);
     }
 
     /// Tests that dependencies of a Rust crate are found correctly.
@@ -589,7 +1232,7 @@ mod tests {
 
     /// Tests that the `Cargo.lock` file is found for a standalone Rust crate.
     #[rstest]
-    fn find_cargo_lock() {
+    fn test_find_cargo_lock() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         temp_dir
             .child("Cargo.toml")
@@ -606,7 +1249,7 @@ mod tests {
 
     /// Tests that the `Cargo.lock` file is found for a Rust workspace member.
     #[rstest]
-    fn find_cargo_lock_with_cargo_workspace_member() {
+    fn test_find_cargo_lock_with_cargo_workspace_member() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let container = temp_dir.child("project");
         let crate_a = container.child("crates/a");
@@ -630,7 +1273,7 @@ mod tests {
 
     /// Tests that a `Cargo.lock` file is not returned when it can't be found.
     #[rstest]
-    fn find_cargo_lock_when_not_found() {
+    fn test_find_cargo_lock_when_not_found() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let crate_a = temp_dir.child("crates/a");
         crate_a.create_dir_all().unwrap();
@@ -651,7 +1294,7 @@ mod tests {
 
     /// Tests that `Cargo.lock` files are only searched for within the current working directory.
     #[rstest]
-    fn find_cargo_lock_does_not_escape_cwd() {
+    fn test_find_cargo_lock_does_not_escape_cwd() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let project = temp_dir.child("projects");
         let crate_a = project.child("crates/a");

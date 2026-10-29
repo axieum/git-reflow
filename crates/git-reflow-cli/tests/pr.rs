@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use assert_fs::{TempDir, prelude::*};
 use git_reflow_api::git::stage_and_commit;
-use git_reflow_fixtures::{INSTA_STDOUT_FILTERS, add_origin_remote, project_repo};
+use git_reflow_fixtures::{INSTA_STDOUT_FILTERS, add_origin_remote, commit_patch, project_repo};
 use git2::Repository;
 use httpmock::prelude::*;
 use rstest::rstest;
@@ -78,7 +78,11 @@ fn test_pr_command_creates_a_pull_request(#[with("example-rust-workspace")] proj
     // Verify the Git repository state remains unchanged, and that the release branch was pushed up.
     assert_eq!(repo.head().unwrap().target().unwrap(), head);
     assert!(repo.statuses(None).unwrap().is_empty(), "uncommitted changes");
-    assert!(remote_repo.find_reference("refs/heads/reflow--branches--main").is_ok());
+    let release_commit = remote_repo
+        .find_reference("refs/heads/reflow--branches--main")
+        .unwrap()
+        .peel_to_commit()
+        .unwrap();
 
     // Verify that a pull request was created for the release branch.
     // NB: We expect one combined pull request, since `separate_pull_requests` is false by default.
@@ -87,6 +91,10 @@ fn test_pr_command_creates_a_pull_request(#[with("example-rust-workspace")] proj
 
     insta::with_settings!({ filters => INSTA_STDOUT_FILTERS }, {
         insta::assert_snapshot!(String::from_utf8_lossy(&assert.get_output().stdout));
+        insta::assert_snapshot!(
+            "pr_command_creates_a_pull_request_diff",
+            commit_patch(&remote_repo, &release_commit),
+        );
     });
 }
 

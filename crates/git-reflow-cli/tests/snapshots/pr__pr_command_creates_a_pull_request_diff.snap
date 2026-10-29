@@ -1,0 +1,79 @@
+---
+source: crates/git-reflow-cli/tests/pr.rs
+expression: "commit_patch(&remote_repo, &release_commit)"
+---
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index [COMMIT SHA]..[COMMIT SHA]
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,5 @@
++## [1.1.0] - [DATE]
++
++### 🚀 Features
++
++- *(api)* Add a `subtract` function
+diff --git a/Cargo.lock b/Cargo.lock
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -4,11 +4,11 @@ version = 4
+ 
+ [[package]]
+ name = "example-api"
+-version = "1.0.0"
++version = "1.1.0"
+ 
+ [[package]]
+ name = "example-cli"
+-version = "1.0.0"
++version = "1.0.1"
+ dependencies = [
+  "example-api",
+ ]
+diff --git a/crates/example-api/CHANGELOG.md b/crates/example-api/CHANGELOG.md
+new file mode 100644
+index [COMMIT SHA]..[COMMIT SHA]
+--- /dev/null
++++ b/crates/example-api/CHANGELOG.md
+@@ -0,0 +1,5 @@
++## [1.1.0] - [DATE]
++
++### 🚀 Features
++
++- *(api)* Add a `subtract` function
+diff --git a/crates/example-api/Cargo.toml b/crates/example-api/Cargo.toml
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/crates/example-api/Cargo.toml
++++ b/crates/example-api/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "example-api"
+-version = "1.0.0"
++version = "1.1.0"
+ description = "An example project."
+ edition.workspace = true
+ license.workspace = true
+diff --git a/crates/example-cli/CHANGELOG.md b/crates/example-cli/CHANGELOG.md
+new file mode 100644
+index [COMMIT SHA]..[COMMIT SHA]
+--- /dev/null
++++ b/crates/example-cli/CHANGELOG.md
+@@ -0,0 +1,5 @@
++## [1.0.1] - [DATE]
++
++### 🐛 Bug Fixes
++
++- *(deps)* Update dependency `example-api` to v1.1.0
+diff --git a/crates/example-cli/Cargo.toml b/crates/example-cli/Cargo.toml
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/crates/example-cli/Cargo.toml
++++ b/crates/example-cli/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "example-cli"
+-version = "1.0.0"
++version = "1.0.1"
+ description = "An example project."
+ edition.workspace = true
+ license.workspace = true

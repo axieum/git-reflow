@@ -6,6 +6,7 @@ use semver::Version;
 use serde::de::Error;
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, de};
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 use std::marker::PhantomData;
@@ -45,6 +46,24 @@ pub trait BaseStrategy {
     fn write_version(
         &self,
         new_version: &Version,
+        config: &PackageConfig,
+        dry_run: bool,
+    ) -> anyhow::Result<Vec<PathBuf>>;
+
+    /// Writes new dependency versions to the project files.
+    ///
+    /// # Arguments
+    ///
+    /// * `versions` - A map of dependency names to their new versions.
+    /// * `config` - The package configuration.
+    /// * `dry_run` - If true, do not actually write the changes.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of the changed file paths.
+    fn write_dependency_versions(
+        &self,
+        versions: &HashMap<String, Version>,
         config: &PackageConfig,
         dry_run: bool,
     ) -> anyhow::Result<Vec<PathBuf>>;
@@ -95,6 +114,19 @@ impl BaseStrategy for Strategy {
             Strategy::Basic(strategy) => strategy.write_version(new_version, config, dry_run),
             Strategy::Python(strategy) => strategy.write_version(new_version, config, dry_run),
             Strategy::Rust(strategy) => strategy.write_version(new_version, config, dry_run),
+        }
+    }
+
+    fn write_dependency_versions(
+        &self,
+        versions: &HashMap<String, Version>,
+        config: &PackageConfig,
+        dry_run: bool,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        match self {
+            Strategy::Basic(strategy) => strategy.write_dependency_versions(versions, config, dry_run),
+            Strategy::Python(strategy) => strategy.write_dependency_versions(versions, config, dry_run),
+            Strategy::Rust(strategy) => strategy.write_dependency_versions(versions, config, dry_run),
         }
     }
 

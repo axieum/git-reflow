@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail};
 use regex::Regex;
 use semver::Version;
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Value;
@@ -58,6 +58,26 @@ impl BaseStrategy for PythonStrategy {
         }
 
         Ok(vec![])
+    }
+
+    /// Writes new dependency versions to the `pyproject.toml` and lock files.
+    ///
+    /// # Arguments
+    ///
+    /// * `versions` - A map of dependency names to their new versions.
+    /// * `config` - The package configuration.
+    /// * `dry_run` - If true, do not actually write the changes.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of the changed file paths.
+    fn write_dependency_versions(
+        &self,
+        _versions: &HashMap<String, Version>,
+        _config: &PackageConfig,
+        _dry_run: bool,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        todo!();
     }
 
     /// Suggests the package name from either the `pyproject.toml` or `setup.py` files.
