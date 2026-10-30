@@ -159,7 +159,7 @@ fn test_release_command_tags_via_github_api(#[with("example-rust-workspace")] pr
     }
 
     // Run the `release` command for the current commit.
-    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
@@ -260,7 +260,7 @@ fn test_release_command_can_skip_major_and_minor_tags(#[with("example-rust")] pr
     });
 
     // Run the `release` command for the current commit.
-    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
@@ -369,7 +369,7 @@ fn test_release_command_noop_when_already_released(
     });
 
     // Run the `release` command and check its JSON output.
-    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
@@ -464,7 +464,7 @@ fn test_release_command_with_dry_run(#[with("example-rust-workspace")] project_r
     });
 
     // Run the `release` command with `--dry-run` for the current commit.
-    let assert = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    let assert = Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")

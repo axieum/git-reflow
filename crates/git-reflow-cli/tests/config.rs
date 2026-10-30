@@ -11,7 +11,7 @@ use rstest::*;
 fn test_config_command(#[case] fixture: &str) {
     let (project_dir, _repo) = project_repo(fixture);
 
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = Command::cargo_bin("git-reflow").unwrap();
     let assert = cmd.current_dir(&project_dir).arg("config").assert().success();
 
     insta::with_settings!({ filters => INSTA_STDOUT_FILTERS }, {

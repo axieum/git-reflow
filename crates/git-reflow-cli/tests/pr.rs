@@ -112,7 +112,7 @@ fn test_pr_command_creates_separate_pull_requests(
     let head = repo.head().unwrap().target().unwrap();
 
     // Run the `pr` command for the changed packages.
-    let assert = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    let assert = Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
@@ -236,7 +236,7 @@ fn test_pr_command_commits_via_github_api(#[with("example-rust-workspace")] proj
     });
 
     // Run the `pr` command for the changed packages.
-    let assert = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    let assert = Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
@@ -325,7 +325,7 @@ fn test_pr_command_noop_when_remote_is_up_to_date(
     let head = repo.head().unwrap().target().unwrap();
 
     // Run the `pr` command once to publish the release branch and create its pull request.
-    let assert = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    let assert = Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
@@ -337,7 +337,7 @@ fn test_pr_command_noop_when_remote_is_up_to_date(
     assert_ne!(remote_commit_id, head);
 
     // Run the `pr` command again and check that its JSON output contains no pull requests.
-    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
@@ -393,7 +393,7 @@ fn test_pr_command_noop_when_no_changes(#[with("example-rust-workspace")] projec
     }
 
     // Run the `pr` command and check its JSON output.
-    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
@@ -457,7 +457,7 @@ fn test_pr_command_with_dry_run(
     let head = repo.head().unwrap().target().unwrap();
 
     // Run the `pr` command with `--dry-run` for the changed package.
-    let assert = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    let assert = Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
@@ -492,7 +492,7 @@ fn test_pr_command_with_empty_plan(#[with("example-rust-workspace")] project_rep
     fs::write(&plan_path, "[]").unwrap();
 
     // Run the `pr` command and check its JSON output.
-    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .args(["pr", "--target-branch", "main", "--plan"])

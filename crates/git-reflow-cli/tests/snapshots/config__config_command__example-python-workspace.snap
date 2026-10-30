@@ -15,6 +15,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     "separate-pull-requests": false,
     "tag-major-and-minor": true
   },
+  "exclude": [],
   "packages": [
     {
       "dir": ".",

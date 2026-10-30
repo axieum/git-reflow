@@ -34,7 +34,7 @@ fn test_plan_command_with_scope(#[with("example-rust-workspace")] project_repo: 
     stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
 
     // Run the `plan` command, scoping it to the `example-api` package only.
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = Command::cargo_bin("git-reflow").unwrap();
     let assert = cmd
         .current_dir(&project_dir)
         .arg("plan")
@@ -74,7 +74,7 @@ fn test_plan_command_with_show_context(#[with("example-rust-workspace")] project
     stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
 
     // Run the `plan` command, showing the `git-cliff` context.
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = Command::cargo_bin("git-reflow").unwrap();
     let assert = cmd
         .current_dir(&project_dir)
         .arg("plan")

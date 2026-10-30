@@ -36,7 +36,7 @@ fn test_plan_command(#[with("example-rust")] project_repo: (TempDir, Repository)
     stage_and_commit(&repo, &["."], "feat: add a `subtract` function").unwrap();
 
     // Run the `plan` command.
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = Command::cargo_bin("git-reflow").unwrap();
     let assert = cmd.current_dir(&project_dir).arg("plan").assert().success();
 
     insta::with_settings!({ filters => INSTA_STDOUT_FILTERS }, {
@@ -102,7 +102,7 @@ fn test_pr_command(#[with("example-rust")] project_repo: (TempDir, Repository)) 
     let head = repo.head().unwrap().target().unwrap();
 
     // Run the `pr` command for the changed package.
-    let assert = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    let assert = Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
@@ -209,7 +209,7 @@ fn test_release_command(#[with("example-rust")] project_repo: (TempDir, Reposito
     });
 
     // Run the `release` command for the current commit.
-    let assert = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+    let assert = Command::cargo_bin("git-reflow")
         .unwrap()
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
