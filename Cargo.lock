@@ -879,6 +879,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-reflow"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "assert_fs",
+ "clap",
+ "clap-verbosity-flag",
+ "git-reflow-api",
+ "git-reflow-fixtures",
+ "git2",
+ "httpmock",
+ "insta",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-log",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "git-reflow-api"
 version = "0.1.0"
 dependencies = [
@@ -907,28 +929,6 @@ dependencies = [
  "toml_edit",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "git-reflow-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "assert_fs",
- "clap",
- "clap-verbosity-flag",
- "git-reflow-api",
- "git-reflow-fixtures",
- "git2",
- "httpmock",
- "insta",
- "rstest",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-log",
- "tracing-subscriber",
 ]
 
 [[package]]

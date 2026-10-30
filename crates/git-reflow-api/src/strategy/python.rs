@@ -329,6 +329,7 @@ impl PythonStrategy {
     ///
     /// The package configurations of each Python workspace member if any.
     fn suggest_packages_from_uv_workspace(dir: &Path, workspace: &Value) -> anyhow::Result<Vec<PackageConfig>> {
+        // Collect the workspace member globs.
         let members = workspace
             .get("members")
             .and_then(|members| members.as_array())
@@ -337,6 +338,7 @@ impl PythonStrategy {
             .filter_map(|member| member.as_str())
             .collect::<Vec<_>>();
 
+        // Collect the workspace exclude globs and expand them to paths.
         let exclude = workspace
             .get("exclude")
             .and_then(|exclude| exclude.as_array())
@@ -351,6 +353,7 @@ impl PythonStrategy {
             .flatten()
             .collect::<Vec<_>>();
 
+        // Return package configurations for each in-scope workspace member.
         members
             .iter()
             .flat_map(|member| {
@@ -365,7 +368,9 @@ impl PythonStrategy {
                     .ok()
                     .cloned()
             })
+            // Filter out any excluded paths.
             .filter(|path| !exclude.contains(path))
+            // Filter out any paths that do not contain a `pyproject.toml` file.
             .filter(|path| path.join("pyproject.toml").try_exists().unwrap_or(false))
             .map(|path| {
                 PackageConfig {

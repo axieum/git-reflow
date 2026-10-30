@@ -103,10 +103,12 @@ impl BaseStrategy for RustStrategy {
     ///
     /// The package name for the given Rust project.
     fn suggest_name(&self, dir: &Path) -> anyhow::Result<String> {
+        // Parse the `Cargo.toml` file.
         let filename = &dir.join("Cargo.toml");
         let contents = fs::read_to_string(filename)?;
         let data: CargoToml = toml::from_str(&contents)?;
 
+        // Return the package name from the `[package.name]` field or fallback to the directory name.
         data.package
             .map_or_else(
                 || {
@@ -147,6 +149,7 @@ impl BaseStrategy for RustStrategy {
 
         let workspace = data.get("workspace");
 
+        // Collect the workspace member globs.
         let members = workspace
             .and_then(|workspace| workspace.get("members"))
             .and_then(|members| members.as_array())
@@ -155,6 +158,7 @@ impl BaseStrategy for RustStrategy {
             .filter_map(|member| member.as_str())
             .collect::<Vec<_>>();
 
+        // Collect the workspace exclude globs and expand them to paths.
         let exclude = workspace
             .and_then(|workspace| workspace.get("exclude"))
             .and_then(|exclude| exclude.as_array())
@@ -169,6 +173,7 @@ impl BaseStrategy for RustStrategy {
             .flatten()
             .collect::<Vec<_>>();
 
+        // Return package configurations for each in-scope workspace member.
         members
             .iter()
             .flat_map(|member| {
@@ -183,7 +188,9 @@ impl BaseStrategy for RustStrategy {
                     .ok()
                     .cloned()
             })
+            // Filter out any excluded paths.
             .filter(|path| !exclude.contains(path))
+            // Filter out any paths that do not contain a `Cargo.toml` file.
             .filter(|path| path.join("Cargo.toml").try_exists().unwrap_or(false))
             .map(|path| {
                 PackageConfig {
