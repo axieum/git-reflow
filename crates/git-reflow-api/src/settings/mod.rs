@@ -81,11 +81,17 @@ impl AppConfig {
 
     /// Applies default values to missing configuration options.
     pub fn apply_defaults(mut self) -> anyhow::Result<Self> {
-        let mut packages = Vec::new();
-        for package in self.packages {
+        // Build a list of configured packages first.
+        let mut packages = self
+            .packages
+            .into_iter()
             // For each package, cascade apply defaults.
-            let package = package.apply_defaults()?;
+            .map(PackageConfig::apply_defaults)
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
+        // For each configured package, suggest workspace members as packages.
+        for index in 0..packages.len() {
+            let package = &packages[index];
             // If the package is a workspace, suggest nested packages and add them to the list.
             let suggested_packages = if package.workspace {
                 package.strategy().suggest_packages(&package.dir)?
@@ -93,8 +99,7 @@ impl AppConfig {
                 Vec::new()
             };
 
-            // Add the package and any workspace packages to the list.
-            packages.push(package);
+            // Add any workspace packages that are not already configured or discovered.
             packages.extend(
                 suggested_packages
                     .into_iter()
@@ -204,10 +209,19 @@ mod tests {
         // Create a default configuration with workspace discovery enabled.
         let (project_dir, _repo) = project_repo;
         let config = AppConfig {
-            packages: vec![PackageConfig {
-                dir: project_dir.path().to_path_buf(),
-                ..Default::default()
-            }],
+            packages: vec![
+                // Configure the root package, which defaults to workspace discovery enabled.
+                PackageConfig {
+                    dir: project_dir.path().to_path_buf(),
+                    ..Default::default()
+                },
+                // Explicitly configure one of the workspace members to test that is is not duplicated or overwritten.
+                PackageConfig {
+                    dir: project_dir.child("crates/example-api").to_path_buf(),
+                    scope: Some("api".to_string()),
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         }
         .apply_defaults()
@@ -221,7 +235,7 @@ mod tests {
         assert_eq!(config.packages[2].dir, project_dir.child("crates/example-cli").path());
         assert_eq!(config.packages[1].name, Some("example-api".to_string()));
         assert_eq!(config.packages[2].name, Some("example-cli".to_string()));
-        assert_eq!(config.packages[1].scope(), Some("example-api"));
+        assert_eq!(config.packages[1].scope(), Some("api")); // NB: We explicitly set the scope for this crate above.
         assert_eq!(config.packages[2].scope(), Some("example-cli"));
         assert!(matches!(config.packages[1].strategy(), Strategy::Rust(_)));
         assert!(matches!(config.packages[2].strategy(), Strategy::Rust(_)));

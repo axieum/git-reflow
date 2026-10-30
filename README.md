@@ -30,7 +30,7 @@ cargo install git-reflow --locked
 ## Usage
 
 ```bash
-git reflow --help
+git reflow help
 ```
 
 ## Configuring
