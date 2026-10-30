@@ -1,0 +1,6 @@
+# https://github.com/axieum/git-reflow
+
+exclude = ["crates/git-reflow-fixtures"]
+
+[[packages]]
+name = "git-reflow" # NB: A Cargo workspace does not have a package name, so specify one here.
