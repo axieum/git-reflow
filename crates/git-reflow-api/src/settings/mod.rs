@@ -31,7 +31,8 @@ pub struct AppConfig {
 /// Returns the default value for `$.packages`.
 fn default_packages() -> Vec<PackageConfig> {
     vec![PackageConfig {
-        include_name_in_tag: false, // The root package should not include the name in tag
+        include_name_in_tag: false, // NB: The root package should not include the name in tag.
+        make_latest: true,          // NB: The root package should be marked as latest by default.
         ..Default::default()
     }]
 }
@@ -162,6 +163,8 @@ pub fn load(config_path: Option<PathBuf>) -> anyhow::Result<AppConfig> {
     {
         // The main package should not include the name in Git tags by default.
         package.entry("include-name-in-tag").or_insert(false.into());
+        // The main package should be marked as latest by default.
+        package.entry("make-latest").or_insert(true.into());
     }
 
     // Apply defaults to the configuration.
@@ -304,6 +307,35 @@ mod tests {
         // Verify that the first package's `include_name_in_tag` is set to the explicit value or defaults to `false`.
         assert_eq!(config.packages[0].include_name_in_tag, explicit.unwrap_or(false));
         assert!(config.packages[1].include_name_in_tag);
+    }
+
+    /// Tests that only the first package defaults to make latest without overriding explicit settings.
+    #[rstest::rstest]
+    fn test_load_when_packages_make_latest(
+        #[values(None, Some(true), Some(false))] explicit: Option<bool>,
+        #[values(None, Some(true), Some(false))] second_explicit: Option<bool>,
+    ) {
+        // Prepare two package configurations.
+        let mut package = serde_json::json!({ "name": "first", "strategy": "basic" });
+        if let Some(value) = explicit {
+            package["make-latest"] = value.into();
+        }
+        let mut second_package = serde_json::json!({ "name": "second", "strategy": "basic" });
+        if let Some(value) = second_explicit {
+            second_package["make-latest"] = value.into();
+        }
+        let packages = serde_json::json!([package, second_package]);
+
+        // Create a temporary configuration file.
+        let file = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
+        serde_json::to_writer(&file, &serde_json::json!({ "packages": packages })).unwrap();
+
+        // Load the configuration.
+        let config = load(Some(file.path().to_path_buf())).unwrap();
+
+        // Verify that the first package's `make_latest` is set to the explicit value or defaults to `true`.
+        assert_eq!(config.packages[0].make_latest, explicit.unwrap_or(true));
+        assert_eq!(config.packages[1].make_latest, second_explicit.unwrap_or(false));
     }
 
     /// Tests that exclusion globs (i.e. `$.exclude`) are compiled and serialised to their original strings.

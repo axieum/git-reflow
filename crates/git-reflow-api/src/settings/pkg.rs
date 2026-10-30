@@ -47,7 +47,7 @@ pub struct PackageConfig {
     pub tag_only: bool,
     /// If `true`, mark this release as the latest on the Git provider.
     ///
-    /// **Default:** `true`
+    /// **Default:** `true` for the first package else `false`
     pub make_latest: bool,
 }
 
@@ -70,13 +70,15 @@ impl Default for PackageConfig {
             // By default, we assume that the package is part of a workspace and will detect nested packages if any.
             workspace: true,
             // By default, we include the package name in the git tag, e.g. `git-reflow-api-v1.0.0`.
+            // NB: The first package in the configuration will default to `false` if not specified.
             include_name_in_tag: true,
             // The default changelog path is `CHANGELOG.md` relative to the package directory.
             changelog_path: Some(String::from("CHANGELOG.md")),
             // By default, create both a git tag and a release for this package.
             tag_only: false,
-            // By default, mark this release as the latest on the Git provider.
-            make_latest: true,
+            // By default, do not mark this release as the latest on the Git provider.
+            // NB: The first package in the configuration will default to `true` if not specified.
+            make_latest: false,
         }
     }
 }
@@ -181,7 +183,7 @@ mod tests {
         assert!(config.include_name_in_tag);
         assert_eq!(config.changelog_path(), Some(PathBuf::from(".").join("CHANGELOG.md")));
         assert!(!config.tag_only);
-        assert!(config.make_latest);
+        assert!(!config.make_latest);
     }
 
     /// Tests that the package directory is always serialised with forward slashes, regardless of platform.
