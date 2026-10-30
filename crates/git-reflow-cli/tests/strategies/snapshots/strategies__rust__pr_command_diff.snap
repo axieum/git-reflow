@@ -1,0 +1,37 @@
+---
+source: crates/git-reflow-cli/tests/strategies/rust.rs
+expression: "commit_patch(&remote_repo, &release_commit)"
+---
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index [COMMIT SHA]..[COMMIT SHA]
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,5 @@
++## [1.1.0] - [DATE]
++
++### 🚀 Features
++
++- Add a `subtract` function
+diff --git a/Cargo.lock b/Cargo.lock
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -4,4 +4,4 @@ version = 4
+ 
+ [[package]]
+ name = "example-rust"
+-version = "1.0.0"
++version = "1.1.0"
+diff --git a/Cargo.toml b/Cargo.toml
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "example-rust"
+-version = "1.0.0"
++version = "1.1.0"
+ description = "An example project."
+ edition = "2024"
+ license = "MIT"

@@ -1,0 +1,38 @@
+---
+source: crates/git-reflow-cli/tests/strategies/python.rs
+expression: "commit_patch(&remote_repo, &release_commit)"
+---
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index [COMMIT SHA]..[COMMIT SHA]
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,5 @@
++## [1.1.0] - [DATE]
++
++### 🚀 Features
++
++- Add a `subtract` function
+diff --git a/pyproject.toml b/pyproject.toml
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "example-python"
+-version = "1.0.0"
++version = "1.1.0"
+ description = "An example project."
+ authors = [{ name = "Jonathan Hiles", email = "jonathan@hil.es" }]
+ readme = "README.md"
+diff --git a/uv.lock b/uv.lock
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -4,5 +4,5 @@ requires-python = ">=3.14"
+ 
+ [[package]]
+ name = "example-python"
+-version = "1.0.0"
++version = "1.1.0"
+ source = { editable = "." }

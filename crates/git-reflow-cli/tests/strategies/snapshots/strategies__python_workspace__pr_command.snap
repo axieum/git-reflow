@@ -1,5 +1,5 @@
 ---
-source: crates/git-reflow-cli/tests/pr.rs
+source: crates/git-reflow-cli/tests/strategies/python-workspace.rs
 expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
 ---
 [
@@ -7,13 +7,13 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     "number": 1347,
     "url": "https://github.com/octocat/Hello-World/pull/1347",
     "title": "chore: release v1.1.0",
-    "body": "---\npackages:\n- name: example-rust-workspace\n  version: 1.1.0\n- name: example-api\n  version: 1.1.0\n- name: example-cli\n  version: 1.0.1\n---\n\n<details id=\"example-rust-workspace\">\n<summary>example-rust-workspace: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function</details>\n\n<details id=\"example-api\">\n<summary>example-api: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function</details>\n\n<details id=\"example-cli\">\n<summary>example-cli: v1.0.1</summary>\n\n## [1.0.1] - [DATE]\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0</details>\n",
+    "body": "---\npackages:\n- name: example-python-workspace\n  version: 1.1.0\n- name: example-api\n  version: 1.1.0\n- name: example-cli\n  version: 1.0.1\n---\n\n<details id=\"example-python-workspace\">\n<summary>example-python-workspace: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function</details>\n\n<details id=\"example-api\">\n<summary>example-api: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function</details>\n\n<details id=\"example-cli\">\n<summary>example-cli: v1.0.1</summary>\n\n## [1.0.1] - [DATE]\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0</details>\n",
     "head": "reflow--branches--main",
     "base": "main",
     "existing": false,
     "packages": [
       {
-        "name": "example-rust-workspace",
+        "name": "example-python-workspace",
         "version": "1.1.0",
         "changelog_md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function"
       },

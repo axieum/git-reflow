@@ -1,5 +1,5 @@
 ---
-source: crates/git-reflow-cli/tests/pr.rs
+source: crates/git-reflow-cli/tests/strategies/rust-workspace.rs
 expression: "commit_patch(&remote_repo, &release_commit)"
 ---
 diff --git a/CHANGELOG.md b/CHANGELOG.md

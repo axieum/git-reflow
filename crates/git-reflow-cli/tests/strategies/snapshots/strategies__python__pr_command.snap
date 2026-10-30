@@ -1,0 +1,22 @@
+---
+source: crates/git-reflow-cli/tests/strategies/python.rs
+expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
+---
+[
+  {
+    "number": 1347,
+    "url": "https://github.com/octocat/Hello-World/pull/1347",
+    "title": "chore: release v1.1.0",
+    "body": "---\npackages:\n- name: example-python\n  version: 1.1.0\n---\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- Add a `subtract` function\n",
+    "head": "reflow--branches--main",
+    "base": "main",
+    "existing": false,
+    "packages": [
+      {
+        "name": "example-python",
+        "version": "1.1.0",
+        "changelog_md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- Add a `subtract` function"
+      }
+    ]
+  }
+]

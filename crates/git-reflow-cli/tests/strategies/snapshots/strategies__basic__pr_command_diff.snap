@@ -1,0 +1,24 @@
+---
+source: crates/git-reflow-cli/tests/strategies/basic.rs
+expression: "commit_patch(&remote_repo, &release_commit)"
+---
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index [COMMIT SHA]..[COMMIT SHA]
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,5 @@
++## [1.1.0] - [DATE]
++
++### 🚀 Features
++
++- *(README)* Add a new line
+diff --git a/VERSION.txt b/VERSION.txt
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/VERSION.txt
++++ b/VERSION.txt
+@@ -1 +1 @@
+-1.0.0
+\ No newline at end of file
++v1.1.0
+\ No newline at end of file

@@ -1,0 +1,99 @@
+---
+source: crates/git-reflow-cli/tests/strategies/python-workspace.rs
+expression: "commit_patch(&remote_repo, &release_commit)"
+---
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index [COMMIT SHA]..[COMMIT SHA]
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,5 @@
++## [1.1.0] - [DATE]
++
++### 🚀 Features
++
++- *(api)* Add a `subtract` function
+diff --git a/packages/example-api/CHANGELOG.md b/packages/example-api/CHANGELOG.md
+new file mode 100644
+index [COMMIT SHA]..[COMMIT SHA]
+--- /dev/null
++++ b/packages/example-api/CHANGELOG.md
+@@ -0,0 +1,5 @@
++## [1.1.0] - [DATE]
++
++### 🚀 Features
++
++- *(api)* Add a `subtract` function
+diff --git a/packages/example-api/pyproject.toml b/packages/example-api/pyproject.toml
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/packages/example-api/pyproject.toml
++++ b/packages/example-api/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "example-api"
+-version = "1.0.0"
++version = "1.1.0"
+ description = "An example project."
+ 
+ [build-system]
+diff --git a/packages/example-cli/CHANGELOG.md b/packages/example-cli/CHANGELOG.md
+new file mode 100644
+index [COMMIT SHA]..[COMMIT SHA]
+--- /dev/null
++++ b/packages/example-cli/CHANGELOG.md
+@@ -0,0 +1,5 @@
++## [1.0.1] - [DATE]
++
++### 🐛 Bug Fixes
++
++- *(deps)* Update dependency `example-api` to v1.1.0
+diff --git a/packages/example-cli/pyproject.toml b/packages/example-cli/pyproject.toml
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/packages/example-cli/pyproject.toml
++++ b/packages/example-cli/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "example-cli"
+-version = "1.0.0"
++version = "1.0.1"
+ description = "An example project."
+ dependencies = [
+   "example-api",
+diff --git a/pyproject.toml b/pyproject.toml
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "example-python-workspace"
+-version = "1.0.0"
++version = "1.1.0"
+ description = "An example project."
+ authors = [{ name = "Jonathan Hiles", email = "jonathan@hil.es" }]
+ readme = "README.md"
+diff --git a/uv.lock b/uv.lock
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -11,12 +11,12 @@ members = [
+ 
+ [[package]]
+ name = "example-api"
+-version = "1.0.0"
++version = "1.1.0"
+ source = { editable = "packages/example-api" }
+ 
+ [[package]]
+ name = "example-cli"
+-version = "1.0.0"
++version = "1.0.1"
+ source = { editable = "packages/example-cli" }
+ dependencies = [
+     { name = "example-api" },
+@@ -27,5 +27,5 @@ requires-dist = [{ name = "example-api", editable = "packages/example-api" }]
+ 
+ [[package]]
+ name = "example-python-workspace"
+-version = "1.0.0"
++version = "1.1.0"
+ source = { editable = "." }
