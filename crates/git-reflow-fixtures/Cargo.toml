@@ -1,9 +1,11 @@
 [package]
 name = "git-reflow-fixtures"
 version = "0.0.0"
+description = "Provides example project fixtures for testing the git-reflow tool"
 publish = false
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 assert_fs = "1.1.4"

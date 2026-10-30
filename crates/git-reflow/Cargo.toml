@@ -1,8 +1,10 @@
 [package]
 name = "git-reflow"
 version = "0.1.0"
+description = "A tool for automating sematic releases by raising pull-requests when commits enter release branches"
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "git-reflow"

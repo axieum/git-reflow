@@ -1,8 +1,10 @@
 [package]
 name = "git-reflow-api"
 version = "0.1.0"
+description = "Provides the core functionality for the git-reflow tool"
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
