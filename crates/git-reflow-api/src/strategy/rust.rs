@@ -137,6 +137,9 @@ impl BaseStrategy for RustStrategy {
     fn suggest_packages(&self, dir: &Path) -> anyhow::Result<Vec<PackageConfig>> {
         // Parse the `Cargo.toml` file.
         let filename = &dir.join("Cargo.toml");
+        if !filename.is_file() {
+            return Ok(vec![]);
+        }
         let contents =
             fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
         let data: Value =

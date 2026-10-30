@@ -16,6 +16,13 @@ pub struct AppConfig {
     /// The Git provider configuration.
     #[serde(default = "deserialize_empty_struct")]
     pub git: GitConfig,
+    /// A list of path globs, compiled when deserialized, to exclude from package discovery.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_exclude",
+        serialize_with = "serialize_exclude"
+    )]
+    pub exclude: Vec<glob::Pattern>,
     /// A list of package configurations.
     #[serde(default = "default_packages")]
     pub packages: Vec<PackageConfig>,
@@ -29,7 +36,21 @@ fn default_packages() -> Vec<PackageConfig> {
     }]
 }
 
-/// Deserializes an empty [serde] struct, applying defaults.
+/// Deserialises the package exclusion globs from `$.exclude`.
+fn deserialize_exclude<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<glob::Pattern>, D::Error> {
+    let patterns: Vec<String> = serde::Deserialize::deserialize(deserializer)?;
+    patterns
+        .iter()
+        .map(|pattern| glob::Pattern::new(pattern).map_err(serde::de::Error::custom))
+        .collect()
+}
+
+/// Serialises the package exclusion globs in `$.exclude` as strings.
+fn serialize_exclude<S: serde::Serializer>(patterns: &[glob::Pattern], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(patterns.iter().map(glob::Pattern::as_str))
+}
+
+/// Deserialises an empty [serde] struct, applying defaults.
 fn deserialize_empty_struct<'de, T: serde::Deserialize<'de>>() -> T {
     let empty = std::iter::empty::<((), ())>();
     let de = serde::de::value::MapDeserializer::<_, serde::de::value::Error>::new(empty);
@@ -76,6 +97,20 @@ impl AppConfig {
             packages.extend(
                 suggested_packages
                     .into_iter()
+                    // Filter out any packages that already exist in the list.
+                    .filter(|pkg| !packages.iter().any(|p| p.dir == pkg.dir))
+                    // Filter out any packages that are excluded by the configuration (`$.exclude`).
+                    .filter(|pkg| {
+                        let excluded = self.exclude.iter().any(|glob| glob.matches_path(&pkg.dir));
+                        if excluded {
+                            debug!(
+                                "skipping package '{}' at '{}' (excluded by config)",
+                                pkg.name.as_deref().unwrap_or("?"),
+                                pkg.dir.display(),
+                            );
+                        }
+                        !excluded
+                    })
                     .map(PackageConfig::apply_defaults)
                     .collect::<anyhow::Result<Vec<_>>>()?,
             );
@@ -152,31 +187,49 @@ pub fn load(config_path: Option<PathBuf>) -> anyhow::Result<AppConfig> {
 mod tests {
     use super::*;
     use crate::strategy::{Strategy, basic::BasicStrategy};
+    use assert_fs::TempDir;
+    use assert_fs::fixture::PathChild;
+    use git_reflow_fixtures::project_repo;
+    use git2::Repository;
+    use std::path::Path;
 
-    /// Tests that defaults are applied with workspace discovery enabled.
-    #[test]
-    fn test_apply_defaults_with_workspace_discovery_enabled() {
+    /// Tests that workspace discovery adds workspace members and applies their defaults.
+    #[rstest::rstest]
+    fn test_apply_defaults_with_workspace_discovery_enabled(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+    ) {
+        // Create a default configuration with workspace discovery enabled.
+        let (project_dir, _repo) = project_repo;
         let config = AppConfig {
-            git: GitConfig::default(),
             packages: vec![PackageConfig {
-                dir: PathBuf::from("."),
-                strategy: Some(Strategy::Basic(BasicStrategy::default())),
+                dir: project_dir.path().to_path_buf(),
                 ..Default::default()
             }],
+            ..Default::default()
         }
         .apply_defaults()
         .unwrap();
 
-        assert_eq!(config.packages.len(), 1);
-        assert_eq!(
-            config.packages[0].name(),
-            std::env::current_dir().unwrap().file_name().unwrap().to_str().unwrap()
-        );
+        // Verify that the workspace members were discovered and added to the configuration.
+        assert!(config.exclude.is_empty());
+        assert_eq!(config.packages.len(), 3);
+        assert_eq!(config.packages[0].dir, project_dir.path());
+        assert_eq!(config.packages[1].dir, project_dir.child("crates/example-api").path());
+        assert_eq!(config.packages[2].dir, project_dir.child("crates/example-cli").path());
+        assert_eq!(config.packages[1].name, Some("example-api".to_string()));
+        assert_eq!(config.packages[2].name, Some("example-cli".to_string()));
+        assert_eq!(config.packages[1].scope(), Some("example-api"));
+        assert_eq!(config.packages[2].scope(), Some("example-cli"));
+        assert!(matches!(config.packages[1].strategy(), Strategy::Rust(_)));
+        assert!(matches!(config.packages[2].strategy(), Strategy::Rust(_)));
+        assert!(!config.packages[1].make_latest);
+        assert!(!config.packages[2].make_latest);
     }
 
     /// Tests that workspace discovery is skipped when disabled.
     #[test]
     fn test_apply_defaults_with_workspace_discovery_disabled() {
+        // Create a default configuration with workspace discovery disabled.
         let config = AppConfig {
             git: GitConfig::default(),
             packages: vec![PackageConfig {
@@ -185,12 +238,50 @@ mod tests {
                 workspace: false,
                 ..Default::default()
             }],
+            ..Default::default()
         }
         .apply_defaults()
         .unwrap();
 
+        // Verify that the workspace members were not discovered and the configuration remains unchanged.
         assert_eq!(config.packages.len(), 1);
         assert!(!config.packages[0].workspace);
+        assert!(config.exclude.is_empty());
+    }
+
+    /// Tests that discovered packages are excluded when they match the `$.exclude` globs setting.
+    #[rstest::rstest]
+    #[case::one_member("crates/example-api", vec!["example-cli"])]
+    #[case::all_members("crates/*", vec![])]
+    #[case::no_members("crates/missing", vec!["example-api", "example-cli"])]
+    fn test_apply_defaults_with_excluded_packages(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+        #[case] pattern: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        // Create a default configuration with workspace discovery enabled and an exclusion pattern.
+        let (project_dir, _repo) = project_repo;
+        let pattern = project_dir.path().join(pattern);
+        let config = AppConfig {
+            exclude: vec![glob::Pattern::new(pattern.to_str().unwrap()).unwrap()],
+            packages: vec![PackageConfig {
+                dir: project_dir.path().to_path_buf(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+        .apply_defaults()
+        .unwrap();
+
+        // Verify that the in-scope workspace members were discovered and added to the configuration.
+        assert_eq!(config.exclude.len(), 1);
+        assert_eq!(config.packages.len(), expected.len() + 1); // NB: `+1` for the root package.
+        assert_eq!(config.packages[0].dir, project_dir.path());
+        assert!(config.packages[0].workspace);
+        assert_eq!(
+            config.packages[1..].iter().map(PackageConfig::name).collect::<Vec<_>>(),
+            expected,
+        );
     }
 
     /// Tests that only the first package defaults to unprefixed Git tags without overriding explicit settings.
@@ -213,5 +304,16 @@ mod tests {
         // Verify that the first package's `include_name_in_tag` is set to the explicit value or defaults to `false`.
         assert_eq!(config.packages[0].include_name_in_tag, explicit.unwrap_or(false));
         assert!(config.packages[1].include_name_in_tag);
+    }
+
+    /// Tests that exclusion globs (i.e. `$.exclude`) are compiled and serialised to their original strings.
+    #[test]
+    fn test_load_exclude_setting() {
+        let exclude = serde_json::json!(["crates/*", "examples/**"]);
+        let config: AppConfig = serde_json::from_value(serde_json::json!({ "exclude": exclude })).unwrap();
+
+        assert!(config.exclude[0].matches_path(Path::new("crates/example")));
+        assert!(!config.exclude[0].matches_path(Path::new("other/example")));
+        assert_eq!(serde_json::to_value(&config).unwrap()["exclude"], exclude);
     }
 }

@@ -134,6 +134,7 @@ impl BaseStrategy for PythonStrategy {
     ///
     /// The package configurations of each Python workspace member if any.
     fn suggest_packages(&self, dir: &Path) -> anyhow::Result<Vec<PackageConfig>> {
+        // Parse the `pyproject.toml` file.
         let filename = &dir.join("pyproject.toml");
         if !filename.is_file() {
             return Ok(vec![]);
@@ -171,12 +172,12 @@ impl BaseStrategy for PythonStrategy {
     ///
     /// A result containing a list of dependency package names, if any.
     fn find_dependencies(&self, config: &AppConfig, pkg_config: &PackageConfig) -> anyhow::Result<Vec<String>> {
-        // Parse the `pyproject.toml` file of the package.
+        // Parse the `pyproject.toml` file.
         let filename = pkg_config.dir.join("pyproject.toml");
-        if !filename.try_exists()? {
+        if !filename.is_file() {
             debug!(
                 "a `pyproject.toml` file was not found at `{}`, skipping",
-                filename.display()
+                filename.display(),
             );
             return Ok(vec![]);
         }
