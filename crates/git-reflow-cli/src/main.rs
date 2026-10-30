@@ -51,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Set up the logging.
     tracing_subscriber::fmt()
+        .with_writer(io::stderr) // NB: Reserve `stdout` for JSON output.
         .with_env_filter(
             // Prefer the `REFLOW_LOG` environment variable, e.g. `REFLOW_LOG=debug,handlebars=debug`.
             tracing_subscriber::EnvFilter::try_from_env("REFLOW_LOG").unwrap_or_else(|_| {
