@@ -116,11 +116,21 @@ pub fn load(config_path: Option<PathBuf>) -> anyhow::Result<AppConfig> {
     // Add environment variables with highest priority.
     builder = builder.add_source(Environment::with_prefix("GIT_REFLOW"));
 
-    // Load the configuration and deserialise it.
+    // Load the configuration and deserialise it into mutable JSON.
     let config = builder.build().context("failed to build config")?;
-    let result: AppConfig = config.try_deserialize().context("failed to deserialise config")?;
+    let mut config: serde_json::Value = config.try_deserialize().context("failed to deserialise config")?;
+
+    // Apply defaults to the first package, if present.
+    if let Some(package) = config
+        .pointer_mut("/packages/0")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        // The main package should not include the name in Git tags by default.
+        package.entry("include-name-in-tag").or_insert(false.into());
+    }
 
     // Apply defaults to the configuration.
+    let result: AppConfig = serde_json::from_value(config).context("failed to deserialise config")?;
     let result = result.apply_defaults()?;
 
     // Print debug information about the found packages.
@@ -145,7 +155,7 @@ mod tests {
 
     /// Tests that defaults are applied with workspace discovery enabled.
     #[test]
-    fn applies_defaults_with_workspace_discovery_enabled() {
+    fn test_apply_defaults_with_workspace_discovery_enabled() {
         let config = AppConfig {
             git: GitConfig::default(),
             packages: vec![PackageConfig {
@@ -166,7 +176,7 @@ mod tests {
 
     /// Tests that workspace discovery is skipped when disabled.
     #[test]
-    fn skips_workspace_discovery_when_disabled() {
+    fn test_apply_defaults_with_workspace_discovery_disabled() {
         let config = AppConfig {
             git: GitConfig::default(),
             packages: vec![PackageConfig {
@@ -181,5 +191,27 @@ mod tests {
 
         assert_eq!(config.packages.len(), 1);
         assert!(!config.packages[0].workspace);
+    }
+
+    /// Tests that only the first package defaults to unprefixed Git tags without overriding explicit settings.
+    #[rstest::rstest]
+    fn test_load_when_packages_include_name_in_tag(#[values(None, Some(true), Some(false))] explicit: Option<bool>) {
+        // Prepare two package configurations.
+        let mut package = serde_json::json!({ "name": "first", "strategy": "basic" });
+        if let Some(value) = explicit {
+            package["include-name-in-tag"] = value.into();
+        }
+        let packages = serde_json::json!([package, { "name": "second", "strategy": "basic" }]);
+
+        // Create a temporary configuration file.
+        let file = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
+        serde_json::to_writer(&file, &serde_json::json!({ "packages": packages })).unwrap();
+
+        // Load the configuration.
+        let config = load(Some(file.path().to_path_buf())).unwrap();
+
+        // Verify that the first package's `include_name_in_tag` is set to the explicit value or defaults to `false`.
+        assert_eq!(config.packages[0].include_name_in_tag, explicit.unwrap_or(false));
+        assert!(config.packages[1].include_name_in_tag);
     }
 }

@@ -34,7 +34,7 @@ pub struct PackageConfig {
     pub workspace: bool,
     /// If `true`, prefix the git tag with the package name, e.g. `git-reflow-api-v1.0.0`.
     ///
-    /// **Default:** `true`
+    /// **Default:** `false` for the first package else `true`
     pub include_name_in_tag: bool,
     /// The changelog path relative to the package directory.
     ///
