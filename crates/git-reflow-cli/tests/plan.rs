@@ -9,7 +9,7 @@ use std::io::Write;
 
 /// Tests that the `plan` command produces the expected output.
 #[rstest]
-fn test_plan_command(#[with("example-python-uv-workspace")] project_repo: (TempDir, Repository)) {
+fn test_plan_command(#[with("example-python-workspace")] project_repo: (TempDir, Repository)) {
     let (project_dir, repo) = project_repo;
 
     // Commit the current files to the `main` branch.
@@ -46,7 +46,7 @@ fn test_plan_command(#[with("example-python-uv-workspace")] project_repo: (TempD
 
 /// Tests that the `plan` command allows scoping to the given package names.
 #[rstest]
-fn test_plan_command_with_scope(#[with("example-python-uv-workspace")] project_repo: (TempDir, Repository)) {
+fn test_plan_command_with_scope(#[with("example-python-workspace")] project_repo: (TempDir, Repository)) {
     let (project_dir, repo) = project_repo;
 
     // Commit the current files to the `main` branch.

@@ -4,10 +4,8 @@ use rstest::*;
 
 /// Tests that the `config` command produces the expected output for various project fixtures.
 #[rstest]
-#[case::example_python_poetry("example-python-poetry")]
-#[case::example_python_setup_py("example-python-setup-py")]
-#[case::example_python_uv("example-python-uv")]
-#[case::example_python_uv_workspace("example-python-uv-workspace")]
+#[case::example_python("example-python")]
+#[case::example_python_workspace("example-python-workspace")]
 #[case::example_rust("example-rust")]
 #[case::example_rust_workspace("example-rust-workspace")]
 fn test_config_command(#[case] fixture: &str) {

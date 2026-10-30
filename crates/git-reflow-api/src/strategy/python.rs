@@ -1,15 +1,14 @@
 use crate::settings::{AppConfig, pkg::PackageConfig};
 use crate::strategy::{BaseStrategy, Strategy};
-use anyhow::{anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use regex::Regex;
 use semver::Version;
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Value;
-use toml_edit::DocumentMut;
-use tracing::debug;
+use toml_edit::{DocumentMut, Item};
+use tracing::{debug, trace};
 
 /// The [Python](https://www.python.org/) release strategy.
 #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -19,7 +18,7 @@ pub struct PythonStrategy {
 }
 
 impl BaseStrategy for PythonStrategy {
-    /// Writes a new version to the `pyproject.toml` and `setup.py` files.
+    /// Writes a new version to the `pyproject.toml` and `uv.lock` files.
     ///
     /// # Arguments
     ///
@@ -36,31 +35,25 @@ impl BaseStrategy for PythonStrategy {
         config: &PackageConfig,
         dry_run: bool,
     ) -> anyhow::Result<Vec<PathBuf>> {
-        // Update the `pyproject.toml` file
-        let pyproject = &config.dir.join("pyproject.toml");
-        if pyproject.try_exists()? {
-            Self::write_version_to_pyproject_toml(pyproject, new_version, dry_run)?;
-            return Ok(vec![pyproject.to_path_buf()]);
-        } else {
-            debug!(
-                "a `pyproject.toml` file was not found at `{}`, skipping",
-                pyproject.display()
-            );
+        // Update the `pyproject.toml` file.
+        let pyproject_toml_path = config.dir.join("pyproject.toml");
+        if Self::write_version_to_pyproject_toml(&pyproject_toml_path, new_version, dry_run)? {
+            // Update the `uv.lock` file.
+            let uv_lock_path = Self::write_version_to_uv_lock(
+                &std::env::current_dir()?,
+                &config.dir,
+                config.name(),
+                new_version,
+                dry_run,
+            )?;
+            return Ok(vec![pyproject_toml_path, uv_lock_path]);
         }
-
-        // Update the `setup.py` file
-        let setup_py = &config.dir.join("setup.py");
-        if setup_py.try_exists()? {
-            Self::write_version_to_setup_py(setup_py, new_version, dry_run)?;
-            return Ok(vec![setup_py.to_path_buf()]);
-        } else {
-            debug!("a `setup.py` file was not found at `{}`, skipping", setup_py.display());
-        }
-
         Ok(vec![])
     }
 
-    /// Writes new dependency versions to the `pyproject.toml` and lock files.
+    /// Writes new dependency versions to the `pyproject.toml` and `uv.lock` files.
+    ///
+    /// Dependencies without an explicit version are left unchanged.
     ///
     /// # Arguments
     ///
@@ -73,25 +66,43 @@ impl BaseStrategy for PythonStrategy {
     /// A result containing a list of the changed file paths.
     fn write_dependency_versions(
         &self,
-        _versions: &HashMap<String, Version>,
-        _config: &PackageConfig,
-        _dry_run: bool,
+        versions: &HashMap<String, Version>,
+        config: &PackageConfig,
+        dry_run: bool,
     ) -> anyhow::Result<Vec<PathBuf>> {
-        todo!();
+        // Short-circuit when there are no dependency versions to update.
+        if versions.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Update the `pyproject.toml` file.
+        let pyproject_toml_path = config.dir.join("pyproject.toml");
+        if pyproject_toml_path.try_exists()? {
+            if Self::write_dependency_versions_to_pyproject_toml(&pyproject_toml_path, versions, dry_run)? {
+                // Update the `uv.lock` file.
+                let uv_lock_path = Self::write_dependency_versions_to_uv_lock(
+                    &std::env::current_dir()?,
+                    &config.dir,
+                    versions,
+                    dry_run,
+                )?;
+                return Ok(vec![pyproject_toml_path, uv_lock_path]);
+            }
+        } else {
+            debug!(
+                "a `pyproject.toml` file was not found at `{}`, skipping dependencies",
+                pyproject_toml_path.display(),
+            );
+        }
+
+        Ok(vec![])
     }
 
-    /// Suggests the package name from either the `pyproject.toml` or `setup.py` files.
+    /// Suggests the package name from either the `pyproject.toml` file.
     ///
     /// It will check for the package name in the following order:
     ///
-    ///   1. `pyproject.toml`
-    ///
-    ///      - `project.name`
-    ///      - `tool.poetry.name`
-    ///
-    ///   2. `setup.py`
-    ///
-    ///      - `name = ...`
+    ///   1. `project.name`
     ///
     /// # Arguments
     ///
@@ -105,14 +116,6 @@ impl BaseStrategy for PythonStrategy {
         let pyproject = &dir.join("pyproject.toml");
         if pyproject.try_exists()?
             && let Some(name) = Self::suggest_name_from_pyproject_toml(pyproject)?
-        {
-            return Ok(name);
-        }
-
-        // Try `setup.py`.
-        let setup_py = &dir.join("setup.py");
-        if setup_py.try_exists()?
-            && let Some(name) = Self::suggest_name_from_setup_py(setup_py)?
         {
             return Ok(name);
         }
@@ -156,7 +159,6 @@ impl BaseStrategy for PythonStrategy {
     ///
     ///   * Checking `[project.dependencies]`;
     ///   * Checking `[project.optional-dependencies]`;
-    ///   * Checking `[tool.poetry.dependencies]`;
     ///   * Checking `[build-system.requires]`;
     ///   * Excluding `[dependency-groups]` because they should not trigger a release.
     ///
@@ -197,20 +199,10 @@ impl BaseStrategy for PythonStrategy {
             .flat_map(|extras| extras.values())
             .filter_map(Value::as_array)
             .flatten();
-        let poetry_dependencies = data
-            .get("tool")
-            .and_then(|tool| tool.get("poetry"))
-            .and_then(|poetry| poetry.get("dependencies"))
-            .and_then(Value::as_table);
         let dependency_names: HashSet<&str> = dependencies
             .chain(optional_dependencies)
             .filter_map(Value::as_str)
             .filter_map(|requirement| requirement_name.captures(requirement)?.get(1).map(|name| name.as_str()))
-            .chain(
-                poetry_dependencies
-                    .into_iter()
-                    .flat_map(|deps| deps.keys().map(String::as_str)),
-            )
             .collect();
 
         // Return the dependency names that are also configured as packages.
@@ -229,9 +221,6 @@ impl PythonStrategy {
     /// It will check for the package version in the following order:
     ///
     ///   1. `project.version`
-    ///   2. `tool.poetry.version`
-    ///
-    /// It will reject dynamically versioned projects.
     ///
     /// # Arguments
     ///
@@ -241,95 +230,90 @@ impl PythonStrategy {
     ///
     /// # Returns
     ///
-    /// A result of whether the update was successful.
-    fn write_version_to_pyproject_toml(filename: &Path, new_version: &Version, dry_run: bool) -> anyhow::Result<()> {
+    /// A result of whether an update was made.
+    fn write_version_to_pyproject_toml(filename: &Path, new_version: &Version, dry_run: bool) -> anyhow::Result<bool> {
+        // Parse the `pyproject.toml` file.
+        let filename_display = filename.display();
         let contents =
-            fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
+            fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{filename_display}`: {err}"))?;
         let mut data = contents
             .parse::<DocumentMut>()
-            .map_err(|err| anyhow!("could not parse `{}`: {err}", filename.display()))?;
+            .map_err(|err| anyhow!("could not parse `{filename_display}`: {err}"))?;
 
-        // `project.version`.
+        // Update the `[project.version]` field if it exists.
         if let Some(project) = data["project"].as_table_mut() {
             if !dry_run {
-                debug!("set `[project.version]` to `{new_version}` at `{}`", filename.display());
+                debug!("set `[project.version]` to `{new_version}` at `{filename_display}`");
                 project["version"] = toml_edit::value(new_version.to_string());
                 fs::write(filename, data.to_string())
-                    .map_err(|err| anyhow!("failed to write `[project.version]` to `{}`: {err}", filename.display()))?;
+                    .map_err(|err| anyhow!("failed to write `[project.version]` to `{filename_display}`: {err}"))?;
             } else {
-                debug!(
-                    "set `[project.version]` to `{new_version}` at `{}` (dry run)",
-                    filename.display()
-                );
+                debug!("set `[project.version]` to `{new_version}` at `{filename_display}` (dry run)");
             }
-            return Ok(());
+            Ok(true)
+        } else {
+            debug!("could not find `[project.version]` in `{filename_display}`");
+            Ok(false)
         }
-
-        // `tool.poetry.version`.
-        if let Some(poetry) = data["tool"]
-            .as_table_mut()
-            .and_then(|tool| tool["poetry"].as_table_mut())
-        {
-            if !dry_run {
-                debug!(
-                    "set `[tool.poetry.version]` to `{new_version}` at `{}`",
-                    filename.display()
-                );
-                poetry["version"] = toml_edit::value(new_version.to_string());
-                fs::write(filename, data.to_string()).map_err(|err| {
-                    anyhow!(
-                        "failed to write `[tool.poetry.version]` to `{}`: {err}",
-                        filename.display()
-                    )
-                })?;
-            } else {
-                debug!(
-                    "set `[tool.poetry.version]` to `{new_version}` at `{}` (dry run)",
-                    filename.display()
-                );
-            }
-            return Ok(());
-        }
-
-        bail!(
-            "could not find `[project.version]` or `[tool.poetry.version]` in `{}`",
-            filename.display()
-        )
     }
 
-    /// Writes a new version to the given `setup.py` file.
+    /// Writes a new version for a crate to the `uv.lock` file.
+    ///
+    /// It will find the closest `uv.lock` file from a given package directory upwards.
     ///
     /// # Arguments
     ///
-    /// * `filename` - The path to the `setup.py` file.
+    /// * `root` - The root directory.
+    /// * `dir` - The package directory.
+    /// * `name` - The name of the package to update.
     /// * `new_version` - The new version to apply.
     /// * `dry_run` - If true, do not actually write the changes.
     ///
     /// # Returns
     ///
-    /// A result of whether the update was successful.
-    fn write_version_to_setup_py(filename: &Path, new_version: &Version, dry_run: bool) -> anyhow::Result<()> {
+    /// A result containing the path to the updated `uv.lock` file.
+    ///
+    /// # See Also
+    ///
+    /// * [`Self::find_uv_lock()`] - For finding the closest `uv.lock` file.
+    fn write_version_to_uv_lock(
+        root: &Path,
+        dir: &Path,
+        name: &str,
+        new_version: &Version,
+        dry_run: bool,
+    ) -> anyhow::Result<PathBuf> {
+        // Parse the `uv.lock` file.
+        let lockfile = Self::find_uv_lock(dir, root)?;
+        let lockfile_display = lockfile.strip_prefix(root)?.display();
         let contents =
-            fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
+            fs::read_to_string(&lockfile).map_err(|err| anyhow!("could not read `{lockfile_display}`: {err}"))?;
+        let mut data = contents
+            .parse::<DocumentMut>()
+            .map_err(|err| anyhow!("could not parse `{lockfile_display}`: {err}"))?;
 
-        let re = Regex::new(r#"(version(?:\s*|:\s?[^'"]+)?=\s*['"])(.+?)(['"](,|\r|\n|$))"#)?;
-        let new_contents = re.replace(&contents, |caps: &regex::Captures| {
-            format!("{}{}{}", &caps[1], new_version, &caps[3])
-        });
+        // Find the `[[package]]` table for the given package name.
+        let package = data
+            .get_mut("package")
+            .and_then(Item::as_array_of_tables_mut)
+            .and_then(|packages| {
+                packages
+                    .iter_mut()
+                    .find(|pkg| pkg.get("name").and_then(Item::as_str) == Some(name))
+            })
+            .context(format!("package `{name}` not found in `{lockfile_display}`"))?;
 
-        // Check if the contents were actually modified, i.e. got a new `&str` reference.
-        if let Cow::Owned(new_contents) = new_contents {
-            if !dry_run {
-                debug!("set `version` to `{new_version}` at `{}`", filename.display());
-                fs::write(filename, new_contents)
-                    .map_err(|err| anyhow!("failed to write `version` to `{}`: {err}", filename.display()))?;
-            } else {
-                debug!("set `version` to `{new_version}` at `{}` (dry run)", filename.display());
-            }
-            return Ok(());
+        // Update the `version` field in the found package table.
+        if !dry_run {
+            debug!("set `[[package]].version` to `{new_version}` for `{name}` at `{lockfile_display}`");
+            package["version"] = toml_edit::value(new_version.to_string());
+            fs::write(&lockfile, data.to_string())
+                .map_err(|err| anyhow!("failed to write `[[package]].version` to `{lockfile_display}`: {err}"))?;
+        } else {
+            debug!("set `[[package]].version` to `{new_version}` for `{name}` at `{lockfile_display}` (dry run)");
         }
 
-        bail!("could not find `version` in `{}`", filename.display())
+        Ok(lockfile)
     }
 
     /// Suggests Python workspace members from a `uv` workspace as package configurations
@@ -399,7 +383,6 @@ impl PythonStrategy {
     /// It will check for the package name in the following order:
     ///
     ///   1. `project.name`
-    ///   2. `tool.poetry.name`
     ///
     /// # Arguments
     ///
@@ -409,44 +392,314 @@ impl PythonStrategy {
     ///
     /// The package name if successfully extracted.
     fn suggest_name_from_pyproject_toml(path: &Path) -> anyhow::Result<Option<String>> {
+        // Parse the `pyproject.toml` file.
         let content = fs::read_to_string(path).map_err(|err| anyhow!("could not read `{}`: {err}", path.display()))?;
         let data: Value =
             toml::from_str(&content).map_err(|err| anyhow!("could not parse `{}`: {err}", path.display()))?;
 
-        // `project.name`.
+        // Try `project.name`.
         if let Some(name) = data.get("project").and_then(|p| p.get("name")).and_then(|n| n.as_str()) {
-            return Ok(Some(name.to_string()));
-        }
-
-        // `tool.poetry.name`.
-        if let Some(name) = data
-            .get("tool")
-            .and_then(|t| t.get("poetry"))
-            .and_then(|p| p.get("name"))
-            .and_then(|n| n.as_str())
-        {
             return Ok(Some(name.to_string()));
         }
 
         Ok(None)
     }
 
-    /// Suggests the package name from a `setup.py` file.
+    /// Writes new dependency versions to the given `pyproject.toml` file.
     ///
     /// # Arguments
     ///
-    /// * `path` - The path to the `setup.py` file.
+    /// * `filename` - The path to the `pyproject.toml` file.
+    /// * `versions` - A map of dependency names to their new versions.
+    /// * `dry_run` - If true, do not actually write the changes.
     ///
     /// # Returns
     ///
-    /// The package name if successfully extracted.
-    fn suggest_name_from_setup_py(path: &Path) -> anyhow::Result<Option<String>> {
-        let content = fs::read_to_string(path).map_err(|err| anyhow!("could not read `{}`: {err}", path.display()))?;
-        let re = Regex::new(r#"name(?:\s*|:\s?[^'"]+)?=\s*['"](.+?)['"](,|\r|\n|$)"#)?;
-        if let Some(captures) = re.captures(&content) {
-            return Ok(Some(captures[1].to_string()));
+    /// A result of whether any updates were made.
+    fn write_dependency_versions_to_pyproject_toml(
+        filename: &Path,
+        versions: &HashMap<String, Version>,
+        dry_run: bool,
+    ) -> anyhow::Result<bool> {
+        // Parse the `pyproject.toml` file.
+        let contents =
+            fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
+        let mut data = contents
+            .parse::<DocumentMut>()
+            .map_err(|err| anyhow!("could not parse `{}`: {err}", filename.display()))?;
+
+        // Match explicitly versioned requirements while retaining extras and environment markers.
+        let requirement =
+            Regex::new(r"(?i)^(\s*([a-z0-9][a-z0-9._-]*)(?:\s*\[[^\]]*\])?\s*)(\(?\s*[<>=!~][^;@]*?)(\s*(?:;.*)?)$")?;
+        let mut changed = false;
+
+        // Update the dependency versions in the `project` table.
+        if let Some(project) = data.get_mut("project").and_then(Item::as_table_like_mut) {
+            changed |= Self::update_dependency_tables(project, versions, &requirement, filename);
         }
-        Ok(None)
+
+        // Update the dependency versions in the `build-system` table.
+        if let Some(build) = data.get_mut("build-system").and_then(Item::as_table_like_mut) {
+            changed |= Self::update_dependency_tables(build, versions, &requirement, filename);
+        }
+
+        // Update the dependency versions in the `dependency-groups` table.
+        if let Some(groups) = data.get_mut("dependency-groups").and_then(Item::as_table_like_mut) {
+            for (_, group) in groups.iter_mut() {
+                if let Some(requirements) = group.as_array_mut() {
+                    changed |= Self::update_dependency_array(requirements, versions, &requirement, filename);
+                }
+            }
+        }
+
+        // Write the manifest back if any changes were made.
+        if changed {
+            if !dry_run {
+                debug!("write dependency versions to `{}`", filename.display());
+                fs::write(filename, data.to_string())
+                    .map_err(|err| anyhow!("failed to write dependency versions to `{}`: {err}", filename.display()))?;
+            } else {
+                debug!("write dependency versions to `{}` (dry run)", filename.display());
+            }
+        }
+
+        Ok(changed)
+    }
+
+    /// Writes new dependency versions to the given `uv.lock` file.
+    ///
+    /// # Arguments
+    ///
+    /// * `root` - The root directory.
+    /// * `dir` - The package directory.
+    /// * `versions` - A map of dependency names to their new versions.
+    /// * `dry_run` - If true, do not actually write the changes.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the path to the updated `uv.lock` file.
+    fn write_dependency_versions_to_uv_lock(
+        root: &Path,
+        dir: &Path,
+        versions: &HashMap<String, Version>,
+        dry_run: bool,
+    ) -> anyhow::Result<PathBuf> {
+        // Parse the `uv.lock` file.
+        let lockfile = Self::find_uv_lock(dir, root)?;
+        let lockfile_display = lockfile.strip_prefix(root)?.display();
+        let contents =
+            fs::read_to_string(&lockfile).map_err(|err| anyhow!("could not read `{lockfile_display}`: {err}"))?;
+        let mut data = contents
+            .parse::<DocumentMut>()
+            .map_err(|err| anyhow!("could not parse `{lockfile_display}`: {err}"))?;
+
+        // Update the dependency versions in the `uv.lock` file.
+        let mut changed = false;
+        if let Some(packages) = data.get_mut("package").and_then(Item::as_array_of_tables_mut) {
+            for package in packages.iter_mut() {
+                // Check if the dependency has a version to be updated.
+                let Some(version) = package
+                    .get("name")
+                    .and_then(Item::as_str)
+                    .and_then(|name| versions.get(name))
+                else {
+                    continue;
+                };
+
+                // Update the dependency to the new version.
+                let new_version = version.to_string();
+                if package.get("version").and_then(Item::as_str) != Some(new_version.as_str()) {
+                    debug!("set lockfile dependency version to `{version}` at `{lockfile_display}`");
+                    package["version"] = toml_edit::value(new_version);
+                    changed = true;
+                }
+            }
+        }
+
+        // Write the `uv.lock` file back if any changes were made.
+        if changed {
+            if !dry_run {
+                debug!("write dependency versions to `{lockfile_display}`");
+                fs::write(&lockfile, data.to_string())
+                    .map_err(|err| anyhow!("failed to write dependency versions to `{lockfile_display}`: {err}"))?;
+            } else {
+                debug!("write dependency versions to `{lockfile_display}` (dry run)");
+            }
+        }
+
+        Ok(lockfile)
+    }
+
+    /// Updates dependency versions in `pyproject.toml` tables.
+    ///
+    /// # Arguments
+    ///
+    /// * `table` - The TOML table to update.
+    /// * `versions` - A map of dependency names to their new versions.
+    /// * `requirement` - The pattern matching explicitly versioned Python requirements.
+    /// * `filename` - The path to the TOML file being updated (for logging).
+    ///
+    /// # Returns
+    ///
+    /// Whether any dependency versions were updated in the table.
+    fn update_dependency_tables(
+        table: &mut dyn toml_edit::TableLike,
+        versions: &HashMap<String, Version>,
+        requirement: &Regex,
+        filename: &Path,
+    ) -> bool {
+        let mut changed = false;
+        for (key, item) in table.iter_mut() {
+            // Descend through the tables until a depenedency array or table is reached.
+            if matches!(key.get(), "dependencies" | "dev-dependencies" | "requires") {
+                // If the dependencies are in an array of strings, update each string-like entry.
+                if let Some(requirements) = item.as_array_mut() {
+                    changed |= Self::update_dependency_array(requirements, versions, requirement, filename);
+                    continue;
+                }
+
+                // If the dependencies are in a table, update each dependency entry.
+                if let Some(dependencies) = item.as_table_like_mut() {
+                    // For each dependency, check if it is in scope and update its version if necessary.
+                    for (name, dependency) in dependencies.iter_mut() {
+                        // Check if the dependency has a version to be updated.
+                        let Some(version) = versions.get(name.get()) else {
+                            continue;
+                        };
+
+                        // If the dependency is a string, update it directly, otherwise update the `version` field in the table.
+                        let version_item = if dependency.is_str() {
+                            Some(&mut *dependency)
+                        } else {
+                            dependency.get_mut("version")
+                        };
+
+                        // Skip dependencies that do not specify a version, i.e. are path-only or workspace-inherited.
+                        let Some(value) = version_item
+                            .and_then(Item::as_value_mut)
+                            .filter(|value| value.as_str().is_some_and(|v| !matches!(v, "*" | "")))
+                        else {
+                            trace!("skip dependency `{name}` without a version at `{}`", filename.display());
+                            continue;
+                        };
+
+                        // Update the dependency to the new version.
+                        let new_version = version.to_string();
+                        if value.as_str() != Some(new_version.as_str()) {
+                            debug!(
+                                "set dependency `{name}` version to `{version}` at `{}`",
+                                filename.display(),
+                            );
+                            let mut replacement = toml_edit::Value::from(new_version);
+                            *replacement.decor_mut() = value.decor().clone();
+                            *value = replacement;
+                            changed = true;
+                        }
+                    }
+                }
+
+            // Update each optional dependency extra.
+            } else if key.get() == "optional-dependencies"
+                && let Some(extras) = item.as_table_like_mut()
+            {
+                for (_, extra) in extras.iter_mut() {
+                    if let Some(requirements) = extra.as_array_mut() {
+                        changed |= Self::update_dependency_array(requirements, versions, requirement, filename);
+                    }
+                }
+            }
+        }
+
+        changed
+    }
+
+    /// Updates explicitly versioned Python requirement strings in a TOML array.
+    ///
+    /// # Arguments
+    ///
+    /// * `array` - The TOML array to update.
+    /// * `versions` - A map of dependency names to their new versions.
+    /// * `requirement` - The pattern matching explicitly versioned Python requirements.
+    /// * `filename` - The path to the TOML file being updated (for logging).
+    ///
+    /// # Returns
+    ///
+    /// Whether any dependency versions were updated in the array.
+    fn update_dependency_array(
+        array: &mut toml_edit::Array,
+        versions: &HashMap<String, Version>,
+        requirement: &Regex,
+        filename: &Path,
+    ) -> bool {
+        let mut changed = false;
+        for value in array.iter_mut() {
+            // Check if the dependency is a string that matches the requirement pattern.
+            let Some(captures) = value.as_str().and_then(|value| requirement.captures(value)) else {
+                continue;
+            };
+
+            // Check if the dependency has a version to be updated.
+            let Some(version) = versions.get(&captures[2]) else {
+                continue;
+            };
+
+            // Preserve extras, parentheses, markers, and TOML comments around the new constraint.
+            let specifier = if captures[3].trim().starts_with('(') {
+                format!("(=={version})")
+            } else {
+                format!("=={version}")
+            };
+
+            // Update the dependency to the new version.
+            let new_requirement = format!("{}{}{}", &captures[1], specifier, &captures[4]);
+            if value.as_str() != Some(new_requirement.as_str()) {
+                debug!(
+                    "set dependency `{}` version to `{version}` at `{}`",
+                    &captures[2],
+                    filename.display(),
+                );
+                let mut replacement = toml_edit::Value::from(new_requirement);
+                *replacement.decor_mut() = value.decor().clone();
+                *value = replacement;
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
+    /// Finds the closest `uv.lock` file from a given package directory upwards.
+    ///
+    /// This will not traverse any further than the given `relative` directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - The package directory.
+    /// * `relative` - The relative directory to scope the search to, e.g. [`std::env::current_dir()`].
+    ///
+    /// # Returns
+    ///
+    /// A result containing the `uv.lock` path if found.
+    pub fn find_uv_lock(dir: &Path, relative: &Path) -> anyhow::Result<PathBuf> {
+        let mut dir = relative.join(dir);
+
+        // Traverse up until we find `uv.lock` or reach `cwd`.
+        while dir.starts_with(relative) {
+            // Check if `uv.lock` exists at this level.
+            let lockfile = dir.join("uv.lock");
+            if lockfile.is_file() {
+                return Ok(lockfile);
+            }
+            // Move to the parent directory.
+            if !dir.pop() {
+                break;
+            }
+        }
+
+        bail!(
+            "could not find a `uv.lock` file for workspace member `{}`",
+            dir.display(),
+        )
     }
 }
 
@@ -454,6 +707,7 @@ impl PythonStrategy {
 mod tests {
     use super::*;
     use assert_fs::prelude::*;
+    use indoc::indoc;
     use rstest::{fixture, rstest};
 
     /// A test fixture for a default Python strategy.
@@ -464,7 +718,7 @@ mod tests {
 
     /// Tests that the suggested name for a directory is extracted from a `pyproject.toml` file.
     #[rstest]
-    fn suggest_name_for_dir_with_pyproject_toml_file(strategy: PythonStrategy) {
+    fn test_suggest_name_for_dir_with_pyproject_toml_file(strategy: PythonStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         temp_dir
             .child("pyproject.toml")
@@ -475,19 +729,9 @@ mod tests {
         assert_eq!(strategy.suggest_name(&temp_dir).unwrap(), "mystery");
     }
 
-    /// Tests that the suggested name for a directory is extracted from a `setup.py` file.
-    #[rstest]
-    fn suggest_name_for_dir_with_setup_py_file(strategy: PythonStrategy) {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        temp_dir.child("setup.py").write_str("name = \"machine\"").unwrap();
-        temp_dir.child("version.txt").write_str("1.0.0").unwrap(); // red-herring
-
-        assert_eq!(strategy.suggest_name(&temp_dir).unwrap(), "machine");
-    }
-
     /// Tests that the suggested name for a directory is extracted from the first file.
     #[rstest]
-    fn suggest_name_for_dir_with_multiple_files(strategy: PythonStrategy) {
+    fn test_suggest_name_for_dir_with_multiple_files(strategy: PythonStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         temp_dir.child("setup.py").write_str("name = \"foo\"").unwrap();
         temp_dir
@@ -502,7 +746,7 @@ mod tests {
     /// Tests that the suggested name for a directory is not extracted from a directory with no
     /// relevant files to the strategy.
     #[rstest]
-    fn suggest_name_for_dir_with_no_relevant_files(strategy: PythonStrategy) {
+    fn test_suggest_name_for_dir_with_no_relevant_files(strategy: PythonStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         temp_dir.child("CHANGELOG.md").write_str("...").unwrap();
         temp_dir.child("version.txt").write_str("1.0.0").unwrap();
@@ -513,24 +757,12 @@ mod tests {
         );
     }
 
-    /// Tests that the suggested name for a directory can be extracted from other files if
-    /// previous files checked yield no result.
-    #[rstest]
-    fn suggest_name_for_dir_fallthrough(strategy: PythonStrategy) {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        temp_dir.child("pyproject.toml").write_str("[invalid.toml]").unwrap();
-        temp_dir.child("setup.py").write_str("name = \"bar\"").unwrap();
-
-        assert_eq!(strategy.suggest_name(&temp_dir).unwrap(), "bar");
-    }
-
     /// Tests that the suggested name for a directory is not extracted if all files
     /// are present but none yield a result.
     #[rstest]
-    fn suggest_name_for_dir_fallthrough_all(strategy: PythonStrategy) {
+    fn test_suggest_name_for_dir_fallthrough(strategy: PythonStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         temp_dir.child("pyproject.toml").write_str("[invalid.toml]").unwrap();
-        temp_dir.child("setup.py").write_str("# no name").unwrap();
 
         assert_eq!(
             strategy.suggest_name(&temp_dir).unwrap_err().to_string(),
@@ -541,7 +773,7 @@ mod tests {
     /// Tests that the suggested name for a directory is extracted from the `project.name` field
     /// of a `pyproject.toml` file.
     #[rstest]
-    fn suggest_name_from_pyproject_toml_file_with_project_section() {
+    fn test_suggest_name_from_pyproject_toml_file_with_project_section() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let pyproject_toml = temp_dir.child("pyproject.toml");
         pyproject_toml.write_str("[project]\nname = \"magic\"").unwrap();
@@ -550,22 +782,10 @@ mod tests {
         assert_eq!(result.unwrap(), "magic");
     }
 
-    /// Tests that the suggested name for a directory is extracted from the `tool.poetry.name` field
-    /// of a `pyproject.toml` file.
-    #[rstest]
-    fn suggest_name_from_pyproject_toml_file_with_poetry_section() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let pyproject_toml = temp_dir.child("pyproject.toml");
-        pyproject_toml.write_str("[tool.poetry]\nname = \"magic\"").unwrap();
-
-        let result = PythonStrategy::suggest_name_from_pyproject_toml(&pyproject_toml).unwrap();
-        assert_eq!(result.unwrap(), "magic");
-    }
-
     /// Tests that the suggested name for a directory is not extracted from a `pyproject.toml` file
     /// with an unknown structure.
     #[rstest]
-    fn suggest_name_from_pyproject_toml_file_with_unknown_structure() {
+    fn test_suggest_name_from_pyproject_toml_file_with_unknown_structure() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let pyproject_toml = temp_dir.child("pyproject.toml");
         pyproject_toml.write_str("[something]\nname = \"magic\"").unwrap();
@@ -574,65 +794,9 @@ mod tests {
         assert!(result.is_none(), "expected no package name");
     }
 
-    /// Tests that the suggested name for a directory is extracted from a `setup.py` file.
-    #[rstest]
-    fn suggest_name_from_setup_py_file() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let setup_py = temp_dir.child("setup.py");
-        setup_py
-            .write_str(
-                r#"#!/usr/bin/env python
-from distutils.core import setup
-setup(name="foo", version="1.0", py_modules=["foo"])"#,
-            )
-            .unwrap();
-
-        let result = PythonStrategy::suggest_name_from_setup_py(&setup_py).unwrap();
-        assert_eq!(result.unwrap(), "foo");
-    }
-
-    /// Tests that the suggested name for a directory is extracted from a complex `setup.py` file.
-    #[rstest]
-    fn suggest_name_from_setup_py_file_complex() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let setup_py = temp_dir.child("setup.py");
-        setup_py
-            .write_str(
-                r#"#!/usr/bin/env python
-from typing import Final
-
-from distutils.core import setup
-
-name: Final[str] = "bar"
-setup(name=name, version="1.0", py_modules=["foo"])"#,
-            )
-            .unwrap();
-
-        let result = PythonStrategy::suggest_name_from_setup_py(&setup_py).unwrap();
-        assert_eq!(result.unwrap(), "bar");
-    }
-
-    /// Tests that the suggested name for a directory is not extracted from a `setup.py` file
-    /// with no name present.
-    #[rstest]
-    fn suggest_name_from_setup_py_file_with_no_name() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let setup_py = temp_dir.child("setup.py");
-        setup_py
-            .write_str(
-                r#"#!/usr/bin/env python
-from distutils.core import setup
-setup()"#,
-            )
-            .unwrap();
-
-        let result = PythonStrategy::suggest_name_from_setup_py(&setup_py).unwrap();
-        assert!(result.is_none(), "expected no package name");
-    }
-
     /// Tests that there are no suggested packages for a non-workspace Python project.
     #[rstest]
-    fn suggest_packages(strategy: PythonStrategy) {
+    fn test_suggest_packages(strategy: PythonStrategy) {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         temp_dir
             .child("pyproject.toml")
@@ -644,7 +808,7 @@ setup()"#,
 
     /// Tests that members from a `uv` workspace are suggested as packages.
     #[rstest]
-    fn suggest_packages_from_uv_workspace() {
+    fn test_suggest_packages_from_uv_workspace() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let pkg_a = temp_dir.child("packages/a");
         let pkg_b = temp_dir.child("packages/b");
@@ -697,7 +861,7 @@ setup()"#,
 
     /// Tests that a new version is written to a given `pyproject.toml` file.
     #[rstest]
-    fn write_version_to_pyproject_toml() {
+    fn test_write_version_to_pyproject_toml() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let pyproject_toml = temp_dir.child("pyproject.toml");
         pyproject_toml
@@ -711,7 +875,7 @@ setup()"#,
 
     /// Tests that a new version is *not* written to a given `pyproject.toml` file when performing a dry run.
     #[rstest]
-    fn write_version_to_pyproject_toml_with_dry_run() {
+    fn test_write_version_to_pyproject_toml_with_dry_run() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let pyproject_toml = temp_dir.child("pyproject.toml");
         pyproject_toml
@@ -724,41 +888,9 @@ setup()"#,
         pyproject_toml.assert("[project]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n");
     }
 
-    /// Tests that a new version is written to a given `pyproject.toml` file with a `[tool.poetry]` section.
-    #[rstest]
-    fn write_version_to_pyproject_toml_with_poetry() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let pyproject_toml = temp_dir.child("pyproject.toml");
-        pyproject_toml
-            .write_str("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n")
-            .unwrap();
-
-        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0), false);
-        assert!(result.is_ok());
-        pyproject_toml
-            .assert("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.1.0\"\n");
-    }
-
-    /// Tests that a new version is *not* written to a given `pyproject.toml` file with a `[tool.poetry]` section
-    /// when performing a dry run.
-    #[rstest]
-    fn write_version_to_pyproject_toml_with_poetry_and_dry_run() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let pyproject_toml = temp_dir.child("pyproject.toml");
-        pyproject_toml
-            .write_str("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n")
-            .unwrap();
-
-        let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0), true);
-        assert!(result.is_ok());
-        // The version should not be updated because this is a dry run.
-        pyproject_toml
-            .assert("[tool.poetry]\nname = \"magic\"\n# DO NOT manually edit the version\nversion = \"1.0.0\"\n");
-    }
-
     /// Tests that a new version cannot be written to a `pyproject.toml` file with an unknown structure.
     #[rstest]
-    fn write_version_to_pyproject_toml_with_unknown_structure() {
+    fn test_write_version_to_pyproject_toml_with_unknown_structure() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         let pyproject_toml = temp_dir.child("pyproject.toml");
         pyproject_toml
@@ -766,80 +898,465 @@ setup()"#,
             .unwrap();
 
         let result = PythonStrategy::write_version_to_pyproject_toml(&pyproject_toml, &Version::new(1, 1, 0), false);
+        assert!(!result.unwrap());
+    }
+
+    /// Tests that a new version is written to a package's `uv.lock` file.
+    #[rstest]
+    fn test_write_version_to_uv_lock() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let lockfile = temp_dir.child("uv.lock");
+        let crate_a = temp_dir.child("crates/a");
+        crate_a.create_dir_all().unwrap();
+        lockfile
+            .write_str("version = 1\nrevision=1\n[[package]]\nname = \"crate-a\"\nversion = \"1.0.0\"\n")
+            .unwrap();
+
+        let result =
+            PythonStrategy::write_version_to_uv_lock(&temp_dir, &crate_a, "crate-a", &Version::new(1, 1, 0), false);
+        assert!(result.is_ok());
+        lockfile.assert("version = 1\nrevision=1\n[[package]]\nname = \"crate-a\"\nversion = \"1.1.0\"\n");
+    }
+
+    /// Tests that a new version for an unknown package cannot be written to a `uv.lock` file.
+    #[rstest]
+    fn test_write_version_to_uv_lock_with_unknown_package() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let lockfile = temp_dir.child("uv.lock");
+        lockfile
+            .write_str("version = 1\nrevision=1\n[[package]]\nname = \"crate-a\"\nversion = \"1.0.0\"")
+            .unwrap();
+
+        let result =
+            PythonStrategy::write_version_to_uv_lock(&temp_dir, &temp_dir, "unknown", &Version::new(1, 1, 0), false);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            format!(
-                "could not find `[project.version]` or `[tool.poetry.version]` in `{}`",
-                pyproject_toml.display()
-            )
+            "package `unknown` not found in `uv.lock`"
         );
     }
 
-    /// Tests that a new version is written to a given `setup.py` file.
+    /// Tests that a new version is *not* written to a package's `uv.lock` file when performing a dry run.
     #[rstest]
-    fn write_version_to_setup_py() {
+    fn test_write_version_to_uv_lock_with_dry_run() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
-        let setup_py = temp_dir.child("setup.py");
-        setup_py
-            .write_str(
-                r#"#!/usr/bin/env python
-from distutils.core import setup
-setup(name="foo", version="1.0.0", py_modules=["foo"])"#,
-            )
+        let lockfile = temp_dir.child("uv.lock");
+        let crate_a = temp_dir.child("crates/a");
+        crate_a.create_dir_all().unwrap();
+        lockfile
+            .write_str("version = 1\nrevision=1\n[[package]]\nname = \"crate-a\"\nversion = \"1.0.0\"\n")
             .unwrap();
 
-        let result = PythonStrategy::write_version_to_setup_py(&setup_py, &Version::new(1, 1, 0), false);
-        assert!(result.is_ok());
-        setup_py.assert(
-            r#"#!/usr/bin/env python
-from distutils.core import setup
-setup(name="foo", version="1.1.0", py_modules=["foo"])"#,
-        );
-    }
-
-    /// Tests that a new version is *not* written to a given `setup.py` file when performing a dry run.
-    #[rstest]
-    fn write_version_to_setup_py_with_dry_run() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let setup_py = temp_dir.child("setup.py");
-        setup_py
-            .write_str(
-                r#"#!/usr/bin/env python
-from distutils.core import setup
-setup(name="foo", version="1.0.0", py_modules=["foo"])"#,
-            )
-            .unwrap();
-
-        let result = PythonStrategy::write_version_to_setup_py(&setup_py, &Version::new(1, 1, 0), true);
+        let result =
+            PythonStrategy::write_version_to_uv_lock(&temp_dir, &crate_a, "crate-a", &Version::new(1, 1, 0), true);
         assert!(result.is_ok());
         // The version should not be updated because this is a dry run.
-        setup_py.assert(
-            r#"#!/usr/bin/env python
-from distutils.core import setup
-setup(name="foo", version="1.0.0", py_modules=["foo"])"#,
+        lockfile.assert("version = 1\nrevision=1\n[[package]]\nname = \"crate-a\"\nversion = \"1.0.0\"\n");
+    }
+
+    /// Tests that new dependency versions are written to the `pyproject.toml` and `uv.lock` files.
+    #[rstest]
+    fn test_write_dependency_versions(strategy: PythonStrategy) {
+        // Create a Python project with some local dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+        let pyproject_toml = temp_dir.child("pyproject.toml");
+        pyproject_toml
+            .write_str(indoc! {r#"
+                [project]
+                name = "magic"
+                version = "1.0.0"
+                dependencies = ["api", "core>=1.0.0"]
+
+                [build-system]
+                requires = ["build~=1.0.0"]
+                "#})
+            .unwrap();
+        let uv_lock = temp_dir.child("uv.lock");
+        uv_lock
+            .write_str(indoc! {r#"
+                version = 1
+                revision = 1
+
+                [[package]]
+                name = "api"
+                version = "1.0.0"
+
+                [[package]]
+                name = "build"
+                version = "1.0.0"
+
+                [[package]]
+                name = "core"
+                version = "1.0.0"
+                dependencies = [
+                    { name = "api" },
+                ]
+                "#})
+            .unwrap();
+
+        // Build a package configuration for the project.
+        let config = PackageConfig {
+            dir: temp_dir.path().to_path_buf(),
+            name: Some("magic".to_string()),
+            ..Default::default()
+        };
+
+        // Write new dependency versions.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("build".to_string(), Version::new(1, 2, 0)),
+            ("core".to_string(), Version::new(1, 1, 0)),
+        ]);
+        let result = strategy.write_dependency_versions(&versions, &config, false);
+
+        // Verify that the new versions were written correctly.
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            vec![pyproject_toml.to_path_buf(), uv_lock.to_path_buf()]
+        );
+        pyproject_toml.assert(indoc! {r#"
+            [project]
+            name = "magic"
+            version = "1.0.0"
+            dependencies = ["api", "core==1.1.0"]
+
+            [build-system]
+            requires = ["build==1.2.0"]
+            "#});
+        uv_lock.assert(indoc! {r#"
+            version = 1
+            revision = 1
+
+            [[package]]
+            name = "api"
+            version = "1.1.0"
+
+            [[package]]
+            name = "build"
+            version = "1.2.0"
+
+            [[package]]
+            name = "core"
+            version = "1.1.0"
+            dependencies = [
+                { name = "api" },
+            ]
+            "#});
+    }
+
+    /// Tests that new dependency versions are *not* written when performing a dry run.
+    #[rstest]
+    fn test_write_dependency_versions_with_dry_run(strategy: PythonStrategy) {
+        // Create a Python project with some local dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+        let pyproject_toml = temp_dir.child("pyproject.toml");
+        let pyproject_toml_contents = indoc! {r#"
+            [project]
+            name = "magic"
+            version = "1.0.0"
+            dependencies = ["api", "core>=1.0.0"]
+
+            [build-system]
+            requires = ["build~=1.0.0"]
+            "#};
+        pyproject_toml.write_str(pyproject_toml_contents).unwrap();
+        let uv_lock = temp_dir.child("uv.lock");
+        let uv_lock_contents = indoc! {r#"
+            version = 1
+            revision = 1
+
+            [[package]]
+            name = "api"
+            version = "1.0.0"
+
+            [[package]]
+            name = "build"
+            version = "1.0.0"
+
+            [[package]]
+            name = "core"
+            version = "1.0.0"
+            dependencies = [
+                { name = "api" },
+            ]
+            "#};
+        uv_lock.write_str(uv_lock_contents).unwrap();
+
+        // Build a package configuration for the project.
+        let config = PackageConfig {
+            dir: temp_dir.path().to_path_buf(),
+            name: Some("magic".to_string()),
+            ..Default::default()
+        };
+
+        // Write new dependency versions.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("build".to_string(), Version::new(1, 2, 0)),
+            ("core".to_string(), Version::new(1, 1, 0)),
+        ]);
+        let result = strategy.write_dependency_versions(&versions, &config, true);
+
+        // Verify that the new versions were reported as written, but the files were not actually modified.
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            vec![pyproject_toml.to_path_buf(), uv_lock.to_path_buf()]
+        );
+        pyproject_toml.assert(pyproject_toml_contents);
+        uv_lock.assert(uv_lock_contents);
+    }
+
+    /// Tests that an empty map of dependency versions causes a short-circuit and no files are written.
+    #[rstest]
+    fn test_write_dependency_versions_with_no_dependencies(strategy: PythonStrategy) {
+        // Create a Python project.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+
+        // Build a package configuration for the project.
+        let config = PackageConfig {
+            dir: temp_dir.path().to_path_buf(),
+            name: Some("magic".to_string()),
+            ..Default::default()
+        };
+
+        // Write new dependency versions with an empty map.
+        let result = strategy.write_dependency_versions(&HashMap::new(), &config, false);
+
+        // Verify that no files were written.
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    /// Tests that new dependency versions are written to the `pyproject.toml` file.
+    #[rstest]
+    fn test_write_dependency_versions_to_pyproject_toml() {
+        // Create a Python project with some dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let pyproject_toml = temp_dir.child("pyproject.toml");
+        let contents = indoc! {r#"
+            [project]
+            name = "magic"
+            version = "1.0.0"
+            dependencies = [
+                "api",
+                "core[extra]>=1.0.0,<2.0.0; python_version >= '3.12'", # Keep this comment.
+                "other==1.0.0",
+                "direct @ file:///packages/direct",
+                "expanded (>=1.0.0)",
+            ]
+
+            [project.optional-dependencies]
+            cli = ["optional[cli]~=1.0.0"]
+
+            [dependency-groups]
+            dev = ["test!=1.0.0", { include-group = "lint" }]
+            lint = ["lint>=1.0.0"]
+
+            [build-system]
+            requires = ["build~=1.0.0"]
+            "#};
+        pyproject_toml.write_str(contents).unwrap();
+
+        // Write new dependency versions.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("core".to_string(), Version::new(1, 2, 0)),
+            ("direct".to_string(), Version::new(1, 1, 0)),
+            ("expanded".to_string(), Version::new(1, 5, 0)),
+            ("optional".to_string(), Version::new(1, 6, 0)),
+            ("test".to_string(), Version::new(1, 3, 0)),
+            ("lint".to_string(), Version::new(1, 7, 0)),
+            ("build".to_string(), Version::new(1, 4, 0)),
+        ]);
+        let result = PythonStrategy::write_dependency_versions_to_pyproject_toml(&pyproject_toml, &versions, false);
+
+        // Verify that only matching, explicitly versioned dependencies were changed.
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        pyproject_toml.assert(indoc! {r#"
+            [project]
+            name = "magic"
+            version = "1.0.0"
+            dependencies = [
+                "api",
+                "core[extra]==1.2.0; python_version >= '3.12'", # Keep this comment.
+                "other==1.0.0",
+                "direct @ file:///packages/direct",
+                "expanded (==1.5.0)",
+            ]
+
+            [project.optional-dependencies]
+            cli = ["optional[cli]==1.6.0"]
+
+            [dependency-groups]
+            dev = ["test==1.3.0", { include-group = "lint" }]
+            lint = ["lint==1.7.0"]
+
+            [build-system]
+            requires = ["build==1.4.0"]
+            "#});
+
+        // Reapplying persisted versions must not report any further manifest changes.
+        assert!(
+            !PythonStrategy::write_dependency_versions_to_pyproject_toml(&pyproject_toml, &versions, false).unwrap()
         );
     }
 
-    /// Tests that a new version cannot be written to a `setup.py` file with an unknown structure.
+    /// Tests that new dependency versions are *not* written to `pyproject.toml` when performing a dry run.
     #[rstest]
-    fn write_version_to_setup_py_with_unknown_structure() {
+    fn test_write_dependency_versions_to_pyproject_toml_with_dry_run() {
+        // Create a Python project with some dependencies.
         let temp_dir = assert_fs::TempDir::new().unwrap();
-        let setup_py = temp_dir.child("setup.py");
-        setup_py
-            .write_str(
-                r#"#!/usr/bin/env python
-from distutils.core import setup
-setup(name="foo", py_modules=["foo"])"#,
-            )
-            .unwrap();
+        let pyproject_toml = temp_dir.child("pyproject.toml");
+        let contents = indoc! {r#"
+            [project]
+            name = "magic"
+            version = "1.0.0"
+            dependencies = [
+                "api",
+                "core[extra]>=1.0.0,<2.0.0; python_version >= '3.12'", # Keep this comment.
+                "other==1.0.0",
+                "direct @ file:///packages/direct",
+                "expanded (>=1.0.0)",
+            ]
 
-        let result = PythonStrategy::write_version_to_setup_py(&setup_py, &Version::new(1, 1, 0), false);
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            format!("could not find `version` in `{}`", setup_py.display())
-        );
+            [project.optional-dependencies]
+            cli = ["optional[cli]~=1.0.0"]
+
+            [dependency-groups]
+            dev = ["test!=1.0.0", { include-group = "lint" }]
+            lint = ["lint>=1.0.0"]
+
+            [build-system]
+            requires = ["build~=1.0.0"]
+            "#};
+        pyproject_toml.write_str(contents).unwrap();
+
+        // Write new dependency versions with dry run.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("core".to_string(), Version::new(1, 2, 0)),
+            ("direct".to_string(), Version::new(1, 1, 0)),
+            ("expanded".to_string(), Version::new(1, 5, 0)),
+            ("optional".to_string(), Version::new(1, 6, 0)),
+            ("test".to_string(), Version::new(1, 3, 0)),
+            ("lint".to_string(), Version::new(1, 7, 0)),
+            ("build".to_string(), Version::new(1, 4, 0)),
+        ]);
+        let result = PythonStrategy::write_dependency_versions_to_pyproject_toml(&pyproject_toml, &versions, true);
+
+        // Verify that the file was reported as changed, but the contents were not actually modified.
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        pyproject_toml.assert(contents);
+    }
+
+    /// Tests that new dependency versions are written to the `uv.lock` file.
+    #[rstest]
+    fn test_write_dependency_versions_to_uv_lock() {
+        // Create a Python workspace with some dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let package_dir = temp_dir.child("packages/magic");
+        package_dir.create_dir_all().unwrap();
+        let uv_lock = temp_dir.child("uv.lock");
+        let contents = indoc! {r#"
+            version = 1
+            revision = 1
+
+            [[package]]
+            name = "api"
+            version = "1.0.0"
+
+            [[package]]
+            name = "core"
+            version = "1.0.0"
+            dependencies = [
+                { name = "api" },
+            ]
+
+            [[package]]
+            name = "other"
+            version = "1.0.0"
+            "#};
+        uv_lock.write_str(contents).unwrap();
+
+        // Write new dependency versions.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("core".to_string(), Version::new(1, 2, 0)),
+            ("missing".to_string(), Version::new(2, 0, 0)),
+        ]);
+        let result = PythonStrategy::write_dependency_versions_to_uv_lock(&temp_dir, &package_dir, &versions, false);
+
+        // Verify that the new dependency versions were written correctly.
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), uv_lock.to_path_buf());
+        uv_lock.assert(indoc! {r#"
+            version = 1
+            revision = 1
+
+            [[package]]
+            name = "api"
+            version = "1.1.0"
+
+            [[package]]
+            name = "core"
+            version = "1.2.0"
+            dependencies = [
+                { name = "api" },
+            ]
+
+            [[package]]
+            name = "other"
+            version = "1.0.0"
+            "#});
+    }
+
+    /// Tests that new dependency versions are *not* written to `uv.lock` when performing a dry run.
+    #[rstest]
+    fn test_write_dependency_versions_to_uv_lock_with_dry_run() {
+        // Create a Python workspace with some dependencies.
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let package_dir = temp_dir.child("packages/magic");
+        package_dir.create_dir_all().unwrap();
+        let uv_lock = temp_dir.child("uv.lock");
+        let contents = indoc! {r#"
+            version = 1
+            revision = 1
+
+            [[package]]
+            name = "api"
+            version = "1.0.0"
+
+            [[package]]
+            name = "core"
+            version = "1.0.0"
+            dependencies = [
+                { name = "api" },
+            ]
+
+            [[package]]
+            name = "other"
+            version = "1.0.0"
+            "#};
+        uv_lock.write_str(contents).unwrap();
+
+        // Write new dependency versions with dry run.
+        let versions = HashMap::from([
+            ("api".to_string(), Version::new(1, 1, 0)),
+            ("core".to_string(), Version::new(1, 2, 0)),
+            ("missing".to_string(), Version::new(2, 0, 0)),
+        ]);
+        let result = PythonStrategy::write_dependency_versions_to_uv_lock(&temp_dir, &package_dir, &versions, true);
+
+        // Verify that the file was reported as changed, but the contents were not actually modified.
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), uv_lock.to_path_buf());
+        uv_lock.assert(contents);
     }
 
     /// Tests that dependencies of a Python package are found correctly.
@@ -851,12 +1368,6 @@ setup(name="foo", py_modules=["foo"])"#,
     #[case::optional("[project.optional-dependencies]\ncli = ['my-package']", true)]
     #[case::dev("[dependency-groups]\ndev = ['my-package']", false)]
     #[case::build("[build-system]\nrequires = ['my-package>=1.0']", true)]
-    #[case::poetry("[tool.poetry.dependencies]\nmy-package = '^1.0'", true)]
-    #[case::poetry_path(
-        "[tool.poetry.dependencies]\nmy-package = { path = '../my-package', optional = true }",
-        true
-    )]
-    #[case::poetry_dev("[tool.poetry.group.dev.dependencies]\nmy-package = '^1.0'", false)]
     #[case::empty("[project]\nname = 'my-api'", false)]
     #[case::out_of_scope("[project]\ndependencies = ['other-package>=1.0']", false)]
     fn test_find_dependencies(strategy: PythonStrategy, #[case] manifest: &str, #[case] expected: bool) {
@@ -885,5 +1396,84 @@ setup(name="foo", py_modules=["foo"])"#,
         // Find dependencies of `my-api`.
         let dependencies = strategy.find_dependencies(&config, &config.packages[0]).unwrap();
         assert_eq!(dependencies, if expected { vec!["my-package"] } else { vec![] });
+    }
+
+    /// Tests that the `uv.lock` file is found for a standalone uv project.
+    #[rstest]
+    fn test_find_uv_lock() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        temp_dir
+            .child("pyproject.toml")
+            .write_str("[project]\nname = \"a\"")
+            .unwrap();
+        temp_dir.child("uv.lock").write_str("version = 1").unwrap();
+
+        let lockfile = PythonStrategy::find_uv_lock(&temp_dir, &temp_dir);
+        assert_eq!(lockfile.unwrap(), temp_dir.join("uv.lock"));
+    }
+
+    /// Tests that the `uv.lock` file is found for a uv workspace member.
+    #[rstest]
+    fn test_find_uv_lock_with_cargo_workspace_member() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let container = temp_dir.child("project");
+        let package_a = container.child("packages/a");
+        package_a.create_dir_all().unwrap();
+        container
+            .child("pyproject.toml")
+            .write_str("[tool.uv.workspace]\nmembers = [\"packages/*\"]")
+            .unwrap();
+        container.child("uv.lock").write_str("version = 1").unwrap();
+        package_a
+            .child("pyproject.toml")
+            .write_str("[project]\nname = \"a\"")
+            .unwrap();
+
+        let lockfile = PythonStrategy::find_uv_lock(&package_a, &temp_dir);
+        assert_eq!(lockfile.unwrap(), container.join("uv.lock"));
+    }
+
+    /// Tests that a `uv.lock` file is not returned when it can't be found.
+    #[rstest]
+    fn test_find_uv_lock_when_not_found() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let package_a = temp_dir.child("packages/a");
+        package_a.create_dir_all().unwrap();
+        package_a
+            .child("pyproject.toml")
+            .write_str("[project]\nname = \"a\"")
+            .unwrap();
+
+        let lockfile = PythonStrategy::find_uv_lock(&package_a, &temp_dir);
+        assert!(lockfile.is_err());
+        assert!(
+            lockfile
+                .unwrap_err()
+                .to_string()
+                .starts_with("could not find a `uv.lock` file for workspace member")
+        );
+    }
+
+    /// Tests that `uv.lock` files are only searched for within the current working directory.
+    #[rstest]
+    fn test_find_uv_lock_does_not_escape_cwd() {
+        let temp_dir = assert_fs::TempDir::new().unwrap();
+        let project = temp_dir.child("projects");
+        let package_a = project.child("packages/a");
+        package_a.create_dir_all().unwrap();
+        temp_dir.child("uv.lock").write_str("version = 1").unwrap();
+        package_a
+            .child("pyproject.toml")
+            .write_str("[project]\nname = \"a\"")
+            .unwrap();
+
+        let lockfile = PythonStrategy::find_uv_lock(&package_a, &project); // DO NOT escape project path
+        assert!(lockfile.is_err());
+        assert!(
+            lockfile
+                .unwrap_err()
+                .to_string()
+                .starts_with("could not find a `uv.lock` file for workspace member")
+        );
     }
 }

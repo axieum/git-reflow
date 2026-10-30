@@ -1,14 +1,14 @@
 [project]
-name = "example-python-poetry"
+name = "example-python-workspace"
 version = "1.0.0"
 description = "An example project."
 authors = [{ name = "Jonathan Hiles", email = "jonathan@hil.es" }]
 readme = "README.md"
 requires-python = ">=3.14"
 
-[tool.poetry]
-packages = [{ include = "example", from = "src" }]
+[tool.uv.workspace]
+members = ["packages/*"]
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.12.10,<0.13"]
+build-backend = "uv_build"

@@ -135,6 +135,7 @@ impl BaseStrategy for RustStrategy {
     ///
     /// The package configurations of each Cargo workspace member if any.
     fn suggest_packages(&self, dir: &Path) -> anyhow::Result<Vec<PackageConfig>> {
+        // Parse the `Cargo.toml` file.
         let filename = &dir.join("Cargo.toml");
         let contents =
             fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
@@ -245,30 +246,27 @@ impl RustStrategy {
     ///
     /// A result of whether an update was made.
     fn write_version_to_cargo_toml(filename: &Path, new_version: &Version, dry_run: bool) -> anyhow::Result<bool> {
+        // Parse the `Cargo.toml` file.
+        let filename_display = filename.display();
         let contents =
-            fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{}`: {err}", filename.display()))?;
+            fs::read_to_string(filename).map_err(|err| anyhow!("could not read `{filename_display}`: {err}"))?;
         let mut data = contents
             .parse::<DocumentMut>()
-            .map_err(|err| anyhow!("could not parse `{}`: {err}", filename.display()))?;
+            .map_err(|err| anyhow!("could not parse `{filename_display}`: {err}"))?;
 
+        // Update the `[package.version]` field if it exists.
         if let Some(package) = data["package"].as_table_mut() {
             if !dry_run {
-                debug!("set `[package.version]` to `{new_version}` at `{}`", filename.display());
+                debug!("set `[package.version]` to `{new_version}` at `{filename_display}`");
                 package["version"] = toml_edit::value(new_version.to_string());
                 fs::write(filename, data.to_string())
-                    .map_err(|err| anyhow!("failed to write `[package.version]` to `{}`: {err}", filename.display()))?;
+                    .map_err(|err| anyhow!("failed to write `[package.version]` to `{filename_display}`: {err}"))?;
             } else {
-                debug!(
-                    "set `[package.version]` to `{new_version}` at `{}` (dry run)",
-                    filename.display()
-                );
+                debug!("set `[package.version]` to `{new_version}` at `{filename_display}` (dry run)");
             }
             Ok(true)
         } else {
-            debug!(
-                "refusing to write `[package.version]` to Cargo workspace at `{}`",
-                filename.display()
-            );
+            debug!("refusing to write `[package.version]` to Cargo workspace at `{filename_display}`");
             Ok(false)
         }
     }
@@ -299,6 +297,7 @@ impl RustStrategy {
         new_version: &Version,
         dry_run: bool,
     ) -> anyhow::Result<PathBuf> {
+        // Parse the `Cargo.lock` file.
         let lockfile = Self::find_cargo_lock(dir, root)?;
         let lockfile_display = lockfile.strip_prefix(root)?.display();
         let contents =
@@ -307,6 +306,7 @@ impl RustStrategy {
             .parse::<DocumentMut>()
             .map_err(|err| anyhow!("could not parse `{lockfile_display}`: {err}"))?;
 
+        // Find the `[[package]]` table for the given package name.
         let package = data
             .get_mut("package")
             .and_then(Item::as_array_of_tables_mut)
@@ -315,15 +315,16 @@ impl RustStrategy {
                     .iter_mut()
                     .find(|pkg| pkg.get("name").and_then(Item::as_str) == Some(name))
             })
-            .context(format!("package `{name}` not found in `{}`", lockfile_display))?;
+            .context(format!("package `{name}` not found in `{lockfile_display}`"))?;
 
+        // Update the `version` field in the found package table.
         if !dry_run {
-            debug!("set `[[package]] version` to `{new_version}` for `{name}` at `{lockfile_display}`");
+            debug!("set `[[package]].version` to `{new_version}` for `{name}` at `{lockfile_display}`");
             package["version"] = toml_edit::value(new_version.to_string());
             fs::write(&lockfile, data.to_string())
-                .map_err(|err| anyhow!("failed to write `[[package.version]]` to `{lockfile_display}`: {err}"))?;
+                .map_err(|err| anyhow!("failed to write `[[package]].version` to `{lockfile_display}`: {err}"))?;
         } else {
-            debug!("set `[[package]] version` to `{new_version}` for `{name}` at `{lockfile_display}` (dry run)");
+            debug!("set `[[package]].version` to `{new_version}` for `{name}` at `{lockfile_display}` (dry run)");
         }
 
         Ok(lockfile)
@@ -512,14 +513,14 @@ impl RustStrategy {
     pub fn find_cargo_lock(dir: &Path, relative: &Path) -> anyhow::Result<PathBuf> {
         let mut dir = relative.join(dir);
 
-        // Traverse up until we find `Cargo.lock` or reach `cwd`
+        // Traverse up until we find `Cargo.lock` or reach `cwd`.
         while dir.starts_with(relative) {
-            // Check if `Cargo.lock` exists at this level
+            // Check if `Cargo.lock` exists at this level.
             let lockfile = dir.join("Cargo.lock");
             if lockfile.is_file() {
                 return Ok(lockfile);
             }
-            // Move to the parent directory
+            // Move to the parent directory.
             if !dir.pop() {
                 break;
             }
@@ -527,7 +528,7 @@ impl RustStrategy {
 
         bail!(
             "could not find a `Cargo.lock` file for workspace member `{}`",
-            dir.display()
+            dir.display(),
         )
     }
 }

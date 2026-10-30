@@ -6,7 +6,7 @@ requires-python = ">=3.14"
 members = [
     "example-api",
     "example-cli",
-    "example-python-uv-workspace",
+    "example-python-workspace",
 ]
 
 [[package]]
@@ -26,6 +26,6 @@ dependencies = [
 requires-dist = [{ name = "example-api", editable = "packages/example-api" }]
 
 [[package]]
-name = "example-python-uv-workspace"
+name = "example-python-workspace"
 version = "1.0.0"
 source = { editable = "." }

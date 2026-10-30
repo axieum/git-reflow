@@ -572,7 +572,7 @@ fn test_pr_command_with_dry_run(
 
 /// Tests that an empty release plan short-circuits and prints an empty array.
 #[rstest]
-fn test_pr_command_with_empty_plan(#[with("example-python-uv-workspace")] project_repo: (TempDir, Repository)) {
+fn test_pr_command_with_empty_plan(#[with("example-python-workspace")] project_repo: (TempDir, Repository)) {
     // Create a Git repository.
     let (project_dir, _) = project_repo;
 

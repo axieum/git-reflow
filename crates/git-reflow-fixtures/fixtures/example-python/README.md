@@ -1,3 +1,3 @@
-# example-python-uv
+# example-python
 
 An example project.
