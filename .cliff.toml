@@ -1,0 +1,12 @@
+# https://git-cliff.org/
+
+[git]
+commit_parsers = [
+    { message = "^feat", group = "<!-- 0 -->🚀 Features" },
+    { message = "^fix", group = "<!-- 1 -->🐛 Bug Fixes" },
+    { message = "^doc", group = "<!-- 2 -->📚 Documentation" },
+    { message = "^perf", group = "<!-- 3 -->⚡ Performance" },
+    { body = ".*security", group = "<!-- 4 -->🛡️ Security" },
+    { message = "^revert", group = "<!-- 5 -->◀️ Revert" },
+    { message = ".*", skip = true },
+]
