@@ -2,7 +2,7 @@
 
 # git-reflow
 
-`git-reflow` is a tool for automating sematic releases by raising pull-requests when commits enter release branches.
+`git-reflow` is a tool for automating semantic releases by raising pull-requests when commits enter release branches.
 
 </div>
 

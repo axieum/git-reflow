@@ -1,0 +1,87 @@
+name: git-reflow
+description: A tool for automating semantic releases by raising pull-requests when commits enter release branches.
+branding:
+  icon: git-pull-request
+  color: blue
+
+inputs:
+  command:
+    description: "The command to run: pr or release. If omitted, runs release then pr."
+    required: false
+  token:
+    description: "The GitHub token used to create pull requests and releases."
+    required: false
+    default: ${{ github.token }}
+  config:
+    description: "An optional configuration file path, relative to the workspace."
+    required: false
+
+outputs:
+  prs:
+    description: JSON array of pull requests created or updated; otherwise [].
+    value: ${{ steps.reflow.outputs.prs }}
+  pr:
+    description: The first created or updated pull request as JSON; otherwise {}.
+    value: ${{ steps.reflow.outputs.pr }}
+  releases:
+    description: JSON array of released packages, including tag-only packages; otherwise [].
+    value: ${{ steps.reflow.outputs.releases }}
+  release:
+    description: The first released package as JSON; otherwise {}.
+    value: ${{ steps.reflow.outputs.release }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install tools
+      uses: taiki-e/install-action@v2
+      with:
+        tool: |
+          git-cliff@2.14
+          git-reflow@0.1
+
+    - name: Run git-reflow
+      id: reflow
+      shell: bash
+      env:
+        COMMAND: ${{ inputs.command }}
+        CONFIG: ${{ inputs.config }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        args=(--verbose)
+        if [[ -n "$CONFIG" ]]; then
+          args+=(--config "$CONFIG")
+        fi
+
+        commands=(release pr)
+        if [[ -n "$COMMAND" ]]; then
+          commands=("$COMMAND")
+        fi
+
+        prs='[]'
+        pr='{}'
+        releases='[]'
+        release='{}'
+        for command in "${commands[@]}"; do
+          result=$(git-reflow "${args[@]}" "$command")
+          result=$(printf '%s\n' "$result" | jq -ce \
+            'if type == "array" then . else error("expected a JSON array") end')
+
+          case "$command" in
+            pr)
+              prs=$result
+              pr=$(printf '%s\n' "$prs" | jq -c '.[0] // {}')
+              ;;
+            release)
+              releases=$result
+              release=$(printf '%s\n' "$releases" | jq -c '.[0] // {}')
+              ;;
+          esac
+        done
+
+        {
+          echo "prs=$prs"
+          echo "pr=$pr"
+          echo "releases=$releases"
+          echo "release=$release"
+        } >> "$GITHUB_OUTPUT"

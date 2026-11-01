@@ -4,6 +4,7 @@ name: CI
 
 on:
   push:
+    branches: [ "main" ]
   pull_request:
   workflow_dispatch:
 
@@ -43,6 +44,23 @@ jobs:
       - name: 📄 Generate docs
         run: cargo doc --document-private-items --no-deps
 
+  build:
+    name: Build
+
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: ✨ Checkout repository
+        uses: actions/checkout@v7
+
+      - name: 🏗️ Build binaries
+        run: cargo build
+
   test:
     name: Test
 
@@ -63,9 +81,6 @@ jobs:
           tool: |
             git-cliff
             nextest
-
-      - name: 🏗️ Build binaries
-        run: cargo build
 
       - name: 🧪 Run tests
         run: cargo nextest run --no-fail-fast
