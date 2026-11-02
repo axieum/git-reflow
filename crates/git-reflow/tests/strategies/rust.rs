@@ -163,7 +163,7 @@ fn test_release_command(#[with("example-rust")] project_repo: (TempDir, Reposito
     let pkg = PullRequestPackage {
         name: "example-rust".to_string(),
         version: "1.1.0".parse().unwrap(),
-        changelog_md: Some("## [1.1.0] - 2026-09-26\n\n### Features\n\n- Print subtractions\n".to_string()),
+        changelog_md: Some("## [1.1.0] - 2026-09-26\n\n### Features\n\n- Print subtractions".to_string()),
     };
 
     // Mock the release pull request associated with the current commit and the creation of its release.
@@ -200,7 +200,7 @@ fn test_release_command(#[with("example-rust")] project_repo: (TempDir, Reposito
                 "tag_name": "v1.1.0",
                 "target_commitish": head.to_string(),
                 "name": "v1.1.0",
-                "body": format!("{}\n", pkg.changelog_md.as_ref().unwrap()),
+                "body": pkg.changelog_md.as_ref().unwrap(),
                 "make_latest": "true",
             }));
         then.status(201)

@@ -19,7 +19,7 @@ index [COMMIT SHA]..[COMMIT SHA]
 --- /dev/null
 +++ b/packages/example-api/CHANGELOG.md
 @@ -0,0 +1,5 @@
-+## [example-api-v1.1.0] - [DATE]
++## [1.1.0] - [DATE]
 +
 +### 🚀 Features
 +
@@ -42,7 +42,7 @@ index [COMMIT SHA]..[COMMIT SHA]
 --- /dev/null
 +++ b/packages/example-cli/CHANGELOG.md
 @@ -0,0 +1,5 @@
-+## [example-cli-v1.0.1] - [DATE]
++## [1.0.1] - [DATE]
 +
 +### 🐛 Bug Fixes
 +

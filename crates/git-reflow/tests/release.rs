@@ -45,19 +45,19 @@ fn test_release_command_tags_via_github_api(#[with("example-rust-workspace")] pr
             name: "example-rust-workspace".to_string(),
             version: "0.3.0".parse().unwrap(),
             changelog_md: Some(
-                "## [0.3.0] - 2026-09-26\n\n### Features\n\n- Add a `subtract` function and print subtractions\n"
+                "## [0.3.0] - 2026-09-26\n\n### Features\n\n- Add a `subtract` function and print subtractions"
                     .to_string(),
             ),
         },
         PullRequestPackage {
             name: "example-api".to_string(),
             version: "0.2.0".parse().unwrap(),
-            changelog_md: Some("## [0.2.0] - 2026-09-26\n\n### Features\n\n- Add a `subtract` function\n".to_string()),
+            changelog_md: Some("## [0.2.0] - 2026-09-26\n\n### Features\n\n- Add a `subtract` function".to_string()),
         },
         PullRequestPackage {
             name: "example-cli".to_string(),
             version: "0.3.0".parse().unwrap(),
-            changelog_md: Some("## [0.3.0] - 2026-09-26\n\n### Features\n\n- Print subtractions\n".to_string()),
+            changelog_md: Some("## [0.3.0] - 2026-09-26\n\n### Features\n\n- Print subtractions".to_string()),
         },
     ];
     let expected_releases = [
@@ -214,7 +214,7 @@ fn test_release_command_can_skip_major_and_minor_tags(#[with("example-rust")] pr
     let pkg = PullRequestPackage {
         name: "example-rust".to_string(),
         version: "1.2.3".parse().unwrap(),
-        changelog_md: Some("## [1.2.3] - 2026-10-15\n\n### Features\n\n- Print subtractions\n".to_string()),
+        changelog_md: Some("## [1.2.3] - 2026-10-15\n\n### Features\n\n- Print subtractions".to_string()),
     };
 
     // Mock the release pull request associated with the current commit and the creation of its release.
@@ -251,7 +251,7 @@ fn test_release_command_can_skip_major_and_minor_tags(#[with("example-rust")] pr
                 "tag_name": "v1.2.3",
                 "target_commitish": head.to_string(),
                 "name": "v1.2.3",
-                "body": format!("{}\n", pkg.changelog_md.as_ref().unwrap()),
+                "body": pkg.changelog_md.as_ref().unwrap(),
                 "make_latest": "true",
             }));
         then.status(201)
@@ -332,7 +332,7 @@ fn test_release_command_noop_when_already_released(
     let pkg = PullRequestPackage {
         name: "example-rust-workspace".to_string(),
         version: "0.3.0".parse().unwrap(),
-        changelog_md: Some("## [0.3.0] - 2026-09-26\n\n### Features\n\n- Print subtractions\n".to_string()),
+        changelog_md: Some("## [0.3.0] - 2026-09-26\n\n### Features\n\n- Print subtractions".to_string()),
     };
 
     // Mock the release pull request associated with the current commit.
@@ -429,7 +429,7 @@ fn test_release_command_with_dry_run(#[with("example-rust-workspace")] project_r
     let pkg = PullRequestPackage {
         name: "example-rust-workspace".to_string(),
         version: "0.3.0".parse().unwrap(),
-        changelog_md: Some("## [0.3.0] - 2026-09-26\n\n### Features\n\n- Print subtractions\n".to_string()),
+        changelog_md: Some("## [0.3.0] - 2026-09-26\n\n### Features\n\n- Print subtractions".to_string()),
     };
 
     // Mock the release pull request associated with the current commit.

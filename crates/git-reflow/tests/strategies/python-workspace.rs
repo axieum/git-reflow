@@ -175,19 +175,19 @@ fn test_release_command(#[with("example-python-workspace")] project_repo: (TempD
             name: "example-python-workspace".to_string(),
             version: "0.3.0".parse().unwrap(),
             changelog_md: Some(
-                "## [0.3.0] - 2026-09-26\n\n### Features\n\n- Add a `subtract` function and print subtractions\n"
+                "## [0.3.0] - 2026-09-26\n\n### Features\n\n- Add a `subtract` function and print subtractions"
                     .to_string(),
             ),
         },
         PullRequestPackage {
             name: "example-api".to_string(),
             version: "0.2.0".parse().unwrap(),
-            changelog_md: Some("## [0.2.0] - 2026-09-26\n\n### Features\n\n- Add a `subtract` function\n".to_string()),
+            changelog_md: Some("## [0.2.0] - 2026-09-26\n\n### Features\n\n- Add a `subtract` function".to_string()),
         },
         PullRequestPackage {
             name: "example-cli".to_string(),
             version: "0.3.0".parse().unwrap(),
-            changelog_md: Some("## [0.3.0] - 2026-09-26\n\n### Features\n\n- Print subtractions\n".to_string()),
+            changelog_md: Some("## [0.3.0] - 2026-09-26\n\n### Features\n\n- Print subtractions".to_string()),
         },
     ];
     let expected_releases = [

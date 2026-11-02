@@ -175,7 +175,7 @@ fn test_release_command(#[with("example-basic")] project_repo: (TempDir, Reposit
     let pkg = PullRequestPackage {
         name: "example-basic".to_string(),
         version: "1.1.0".parse().unwrap(),
-        changelog_md: Some("## [1.1.0] - 2026-09-26\n\n### Features\n\n- *(README)* Add a new line\n".to_string()),
+        changelog_md: Some("## [1.1.0] - 2026-09-26\n\n### Features\n\n- *(README)* Add a new line".to_string()),
     };
 
     // Mock the release pull request associated with the current commit and the creation of its release.
@@ -212,7 +212,7 @@ fn test_release_command(#[with("example-basic")] project_repo: (TempDir, Reposit
                 "tag_name": "v1.1.0",
                 "target_commitish": head.to_string(),
                 "name": "v1.1.0",
-                "body": format!("{}\n", pkg.changelog_md.as_ref().unwrap()),
+                "body": pkg.changelog_md.as_ref().unwrap(),
                 "make_latest": "true",
             }));
         then.status(201)

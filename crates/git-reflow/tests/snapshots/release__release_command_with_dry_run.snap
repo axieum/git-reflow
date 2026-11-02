@@ -13,6 +13,6 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     "build": null,
     "tag-name": "v0.3.0",
     "url": null,
-    "changelog-md": "## [0.3.0] - [DATE]\n\n### Features\n\n- Print subtractions\n\n"
+    "changelog-md": "## [0.3.0] - [DATE]\n\n### Features\n\n- Print subtractions"
   }
 ]
