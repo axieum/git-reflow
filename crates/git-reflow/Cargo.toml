@@ -1,6 +1,6 @@
 [package]
 name = "git-reflow"
-version = "0.1.0"
+version = "0.1.1"
 description = "A tool for automating semantic releases by raising pull-requests when commits enter release branches"
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ name = "git-reflow"
 path = "src/main.rs"
 
 [dependencies]
-git-reflow-api = { path = "../git-reflow-api", version = "0.1.0" }
+git-reflow-api = { path = "../git-reflow-api", version = "0.1.1" }
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 clap-verbosity-flag = "3.0.4"
