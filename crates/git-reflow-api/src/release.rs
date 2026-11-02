@@ -339,8 +339,7 @@ mod tests {
 
                     ### Features
 
-                    - Print subtractions
-                    "#}
+                    - Print subtractions"#}
                 .to_string(),
             ),
         };
@@ -364,8 +363,7 @@ mod tests {
 
                 ### Features
 
-                - Print subtractions
-                "#});
+                - Print subtractions"#});
 
             when.method(GET)
                 .path(format!("/repos/octocat/Hello-World/commits/{head}/pulls"));
@@ -400,7 +398,7 @@ mod tests {
         config.git.provider = GitProvider::GitHub(provider);
 
         // Call `create_releases` for the current commit.
-        let releases = create_releases(&config, false).await.unwrap();
+        let releases = create_releases(&config, false).await;
 
         // Verify that the release tag was created locally and pushed to the remote at the current commit.
         assert_eq!(repo.head().unwrap().target().unwrap(), head);
@@ -427,6 +425,7 @@ mod tests {
         commit_pulls_mock.assert_async().await;
         get_mock.assert_async().await;
         create_mock.assert_async().await;
+        let releases = releases.unwrap();
         assert_eq!(releases.len(), 1);
         let release = &releases[0];
         assert_eq!(release.package_name, pkg.name);
@@ -473,8 +472,7 @@ mod tests {
 
                         ### Features
 
-                        - Add a `subtract` function and print subtractions
-                        "#}
+                        - Add a `subtract` function and print subtractions"#}
                     .to_string(),
                 ),
             },
@@ -487,8 +485,7 @@ mod tests {
 
                         ### Features
 
-                        - Add a `subtract` function
-                        "#}
+                        - Add a `subtract` function"#}
                     .to_string(),
                 ),
             },
@@ -501,8 +498,7 @@ mod tests {
 
                         ### Features
 
-                        - Print subtractions
-                        "#}
+                        - Print subtractions"#}
                     .to_string(),
                 ),
             },
@@ -561,7 +557,7 @@ mod tests {
         config.git.provider = GitProvider::GitHub(provider);
 
         // Call `create_releases` for the current commit.
-        let releases = create_releases(&config, false).await.unwrap();
+        let releases = create_releases(&config, false).await;
 
         // Verify that all release tags were created locally and pushed to the remote at the current commit.
         assert_eq!(repo.head().unwrap().target().unwrap(), head);
@@ -588,6 +584,7 @@ mod tests {
         for mock in server_mocks {
             mock.assert_async().await;
         }
+        let releases = releases.unwrap();
         assert_eq!(releases.len(), packages.len());
         for ((release, pkg), (tag_name, _, _)) in releases.iter().zip(&packages).zip(expected_releases) {
             assert_eq!(release.package_name, pkg.name);
@@ -637,8 +634,7 @@ mod tests {
 
                     ### Features
 
-                    - Print subtractions
-                    "#}
+                    - Print subtractions"#}
                 .to_string(),
             ),
         };
@@ -662,8 +658,7 @@ mod tests {
 
                 ### Features
 
-                - Print subtractions
-                "#});
+                - Print subtractions"#});
 
             when.method(GET)
                 .path(format!("/repos/octocat/Hello-World/commits/{head}/pulls"));

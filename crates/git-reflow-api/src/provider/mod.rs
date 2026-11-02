@@ -280,7 +280,7 @@ pub fn build_pull_request_body(
             .iter_mut()
             .map(|release| {
                 format!(
-                    "<details id=\"{}\">\n<summary>{}: v{}</summary>\n\n{}</details>\n",
+                    "<details id=\"{}\">\n<summary>{}: v{}</summary>\n\n{}\n</details>\n",
                     release.name,
                     release.name,
                     release.version,
@@ -290,7 +290,11 @@ pub fn build_pull_request_body(
             .collect::<Vec<_>>()
             .join("\n")
     };
-    Ok(format!("---\n{}---\n\n{}", serde_yaml::to_string(&frontmatter)?, body))
+    Ok(format!(
+        "---\n{}---\n\n{}\n",
+        serde_yaml::to_string(&frontmatter)?,
+        body.trim(),
+    ))
 }
 
 /// Parses the package names, versions and their changelog Markdown from a pull request body.
@@ -357,7 +361,7 @@ pub fn parse_pull_request_body(body: Option<&String>) -> anyhow::Result<Vec<Pull
             // If the frontmatter contains only one package, then treat the rest of the body as the changelog.
             if frontmatter.packages.len() == 1 {
                 let package = &mut frontmatter.packages[0];
-                package.changelog_md = Some(content.to_string());
+                package.changelog_md = Some(content.trim().to_string());
                 return Ok(frontmatter.packages);
             }
 
@@ -367,7 +371,7 @@ pub fn parse_pull_request_body(body: Option<&String>) -> anyhow::Result<Vec<Pull
                     && let Some((details, _)) = details.split_once("</details>")
                     && let Some((_, changelog_md)) = details.split_once("</summary>\n\n")
                 {
-                    package.changelog_md = Some(changelog_md.to_string());
+                    package.changelog_md = Some(changelog_md.trim().to_string());
                 }
             }
             Ok(frontmatter.packages)
@@ -431,8 +435,7 @@ mod tests {
                         ### 🚀 Features
 
                         - Add a project-wide feature
-                        - *(api)* Add a `subtract` function
-                        "#}
+                        - *(api)* Add a `subtract` function"#}
                     .to_string(),
                 ),
             },
@@ -445,8 +448,7 @@ mod tests {
 
                         ### 🚀 Features
 
-                        - *(api)* Add a `subtract` function
-                        "#}
+                        - *(api)* Add a `subtract` function"#}
                     .to_string(),
                 ),
             },
@@ -552,8 +554,7 @@ mod tests {
 
                         ### 🚀 Features
 
-                        - *(api)* Add a `subtract` function
-                        "#}
+                        - *(api)* Add a `subtract` function"#}
                     .to_string()
                 ),
             }],
@@ -611,8 +612,7 @@ mod tests {
                             ### 🚀 Features
 
                             - Add a project-wide feature
-                            - *(api)* Add a `subtract` function
-                            "#}
+                            - *(api)* Add a `subtract` function"#}
                         .to_string()
                     ),
                 },
@@ -625,8 +625,7 @@ mod tests {
 
                             ### 🚀 Features
 
-                            - *(api)* Add a `subtract` function
-                            "#}
+                            - *(api)* Add a `subtract` function"#}
                         .to_string()
                     ),
                 },
