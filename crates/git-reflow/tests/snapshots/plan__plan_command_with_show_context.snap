@@ -1,5 +1,5 @@
 ---
-source: crates/git-reflow-cli/tests/plan.rs
+source: crates/git-reflow/tests/plan.rs
 expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
 ---
 [
