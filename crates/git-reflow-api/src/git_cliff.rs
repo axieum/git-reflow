@@ -44,11 +44,12 @@ impl CommandRunner for GitCliffRunner {
 /// Spawns a [`git-cliff`](https://github.com/orhun/git-cliff) process in a given directory and
 /// returns the context as a parsed JSON object.
 ///
-/// > `git-cliff --include-path ${dir}/**/* --unreleased --bump --context`
+/// > `git-cliff --include-path ${dir}/**/* --tag-pattern ${tag_prefix}.* --unreleased --bump --context`
 ///
 /// # Arguments
 ///
 /// * `dir` - The path to scope the commits to.
+/// * `tag_prefix` - The package's release tag prefix, e.g. `v` or `my-package-v`.
 /// * `extra_commits` - A list of synthetic commit messages, such as dependency updates, if any.
 /// * `runner` - The `git-cliff` command runner.
 ///
@@ -57,6 +58,7 @@ impl CommandRunner for GitCliffRunner {
 /// A result containing the parsed `git-cliff` output context for unreleased changes.
 pub fn run_git_cliff(
     dir: &Path,
+    tag_prefix: &str,
     extra_commits: &[String],
     runner: Option<&dyn CommandRunner>,
 ) -> anyhow::Result<Option<Value>> {
@@ -66,7 +68,16 @@ pub fn run_git_cliff(
         _ => dir.join("**").join("*"),
     };
     let include_path = include_path.to_string_lossy();
-    let mut args = vec!["--include-path", &include_path, "--unreleased", "--bump", "--context"];
+    let tag_pattern = format!(r"^{}.*$", regex::escape(tag_prefix));
+    let mut args = vec![
+        "--include-path",
+        &include_path,
+        "--tag-pattern",
+        &tag_pattern,
+        "--unreleased",
+        "--bump",
+        "--context",
+    ];
     for message in extra_commits {
         args.extend(["--with-commit", message]);
     }
@@ -80,8 +91,22 @@ pub fn run_git_cliff(
     if output.status.success() {
         let json_str = str::from_utf8(&output.stdout)?;
         match serde_json::from_str::<Value>(json_str) {
-            Ok(context) => {
-                if let Some(object) = context.as_array().and_then(|a| a.first()) {
+            Ok(mut context) => {
+                if let Some(object) = context.as_array_mut().and_then(|a| a.first_mut()) {
+                    // Strip tag prefixes retained by `git-cliff`, e.g. `my-package-v1.2.3` becomes `1.2.3`.
+                    for path in ["/version", "/previous/version"] {
+                        if let Some(value) = object.pointer_mut(path)
+                            && let Some(version) = value.as_str()
+                        {
+                            let stripped_version = version
+                                .strip_prefix(tag_prefix)
+                                .unwrap_or(version)
+                                .trim_start_matches('v')
+                                .to_string();
+                            *value = Value::String(stripped_version);
+                        }
+                    }
+                    // Trace the parsed context and return.
                     trace!("↳ {}", serde_json::to_string_pretty(object)?);
                     return Ok(Some(object.clone()));
                 }
@@ -108,13 +133,16 @@ pub fn run_git_cliff(
 ///
 /// A result containing the rendered changelog Markdown for the given `git-cliff` context.
 pub fn render_changelog_markdown(context: &Value, runner: Option<&dyn CommandRunner>) -> anyhow::Result<String> {
+    // Serialise the `git-cliff` context to JSON and prepare the command arguments.
     let context_json = serde_json::to_string(&[context]).context("failed to serialize context")?;
     let args = ["--from-context", "-", "--output", "-"];
 
+    // Invoke the `git-cliff` command.
     trace!("$ git-cliff --from-context - --output -");
     let runner = runner.unwrap_or(&GitCliffRunner);
     let output = runner.run(&args, Some(&context_json))?;
 
+    // Check the `git-cliff` output.
     if output.status.success() {
         Ok(String::from_utf8(output.stdout)
             .context("git-cliff output was not valid UTF-8")?
@@ -181,28 +209,35 @@ pub fn write_changelog_markdown(path: &Path, changelog_md: &str) -> anyhow::Resu
 /// # Arguments
 ///
 /// * `context` - The `git-cliff` context data.
+/// * `tag_prefix` - The package's release tag prefix to remove before parsing.
 ///
 /// # Returns
 ///
 /// A result containing the current (`$.previous.version`) and next (`$.version`)
 /// versions as parsed [Semantic Version](https://semver.org/).
-pub fn get_version_from_git_cliff_context(context: &Value) -> anyhow::Result<(Option<Version>, Version)> {
+pub fn get_version_from_git_cliff_context(
+    context: &Value,
+    tag_prefix: &str,
+) -> anyhow::Result<(Option<Version>, Version)> {
+    let parse_version = |version: &str| {
+        let version = version
+            .strip_prefix(tag_prefix)
+            .unwrap_or(version)
+            .trim_start_matches('v');
+        Version::from_str(version).map_err(|err| anyhow!("invalid semver version in git-cliff context: {}", err))
+    };
     let current_version = context
         .get("previous")
         .and_then(|v| v.get("version"))
         .and_then(|v| v.as_str())
-        .map(|v| v.trim_start_matches('v'))
-        .map(|v| Version::from_str(v).map_err(|err| anyhow!("invalid semver version in git-cliff context: {}", err)))
+        .map(parse_version)
         .transpose()?;
 
     let next_version = context
         .get("version")
         .and_then(|v| v.as_str())
-        .map(|v| v.trim_start_matches('v'))
         .ok_or_else(|| anyhow!("missing version in git-cliff context"))
-        .and_then(|v| {
-            Version::from_str(v).map_err(|err| anyhow!("invalid semver version in git-cliff context: {}", err))
-        })?;
+        .and_then(parse_version)?;
 
     Ok((current_version, next_version))
 }
@@ -213,10 +248,13 @@ pub(crate) mod tests {
     use assert_fs::prelude::*;
     use indoc::indoc;
     use mockall::mock;
+    use rstest::rstest;
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
     #[cfg(windows)]
     use std::os::windows::process::ExitStatusExt;
+
+    const TAG_PATTERN: &str = r"^v.*$";
 
     mock! {
         /// The mock `git-cliff` command executor.
@@ -240,6 +278,8 @@ pub(crate) mod tests {
                 args == [
                     "--include-path",
                     &include_glob.to_string_lossy(),
+                    "--tag-pattern",
+                    TAG_PATTERN,
                     "--unreleased",
                     "--bump",
                     "--context",
@@ -253,10 +293,50 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.0.0"}));
+    }
+
+    /// Tests that tag prefixes are stripped from the JSON context when running `git-cliff` with tag prefixes.
+    #[test]
+    fn test_run_git_cliff_with_tag_prefix() {
+        let include_dir = Path::new("crates").join("pkg-a");
+        let include_glob = include_dir.join("**").join("*");
+        let tag_prefix = "example-api-v";
+
+        let mut runner = MockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, _| {
+                args == [
+                    "--include-path",
+                    &include_glob.to_string_lossy(),
+                    "--tag-pattern",
+                    "^example\\-api\\-v.*$",
+                    "--unreleased",
+                    "--bump",
+                    "--context",
+                ]
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0), // success
+                    stdout: r#"[{"version": "example-api-v1.1.0", "previous": {"version": "example-api-v1.0.0"}}]"#
+                        .as_bytes()
+                        .to_vec(),
+                    stderr: vec![],
+                })
+            });
+
+        let result = run_git_cliff(&include_dir, tag_prefix, &[], Some(&runner));
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap().unwrap(),
+            serde_json::json!({"version": "1.1.0", "previous": {"version": "1.0.0"}}),
+        );
     }
 
     /// Tests that each synthetic commit message is passed to `git-cliff` and returned in its context.
@@ -279,6 +359,8 @@ pub(crate) mod tests {
                 args == [
                     "--include-path",
                     &include_glob.to_string_lossy(),
+                    "--tag-pattern",
+                    TAG_PATTERN,
                     "--unreleased",
                     "--bump",
                     "--context",
@@ -297,7 +379,7 @@ pub(crate) mod tests {
             });
 
         // Run `git-cliff` with all synthetic commits.
-        let result = run_git_cliff(&include_dir, &extra_commits, Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &extra_commits, Some(&runner));
 
         // Verify that the returned context retains every synthetic commit exactly once.
         assert!(result.is_ok());
@@ -325,6 +407,8 @@ pub(crate) mod tests {
                 args == [
                     "--include-path",
                     &include_glob.to_string_lossy(),
+                    "--tag-pattern",
+                    TAG_PATTERN,
                     "--unreleased",
                     "--bump",
                     "--context",
@@ -338,7 +422,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -357,6 +441,8 @@ pub(crate) mod tests {
                 args == [
                     "--include-path",
                     &include_glob.to_string_lossy(),
+                    "--tag-pattern",
+                    TAG_PATTERN,
                     "--unreleased",
                     "--bump",
                     "--context",
@@ -370,7 +456,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "git-cliff error: something went wrong");
@@ -389,6 +475,8 @@ pub(crate) mod tests {
                 args == [
                     "--include-path",
                     &include_glob.to_string_lossy(),
+                    "--tag-pattern",
+                    TAG_PATTERN,
                     "--unreleased",
                     "--bump",
                     "--context",
@@ -402,7 +490,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -421,6 +509,8 @@ pub(crate) mod tests {
                 args == [
                     "--include-path",
                     &include_glob.to_string_lossy(),
+                    "--tag-pattern",
+                    TAG_PATTERN,
                     "--unreleased",
                     "--bump",
                     "--context",
@@ -434,7 +524,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
 
         assert!(result.is_err());
         assert_eq!(
@@ -456,6 +546,8 @@ pub(crate) mod tests {
                 args == [
                     "--include-path",
                     &include_glob.to_string_lossy(), // should be `**/*` instead of `./**/*`
+                    "--tag-pattern",
+                    TAG_PATTERN,
                     "--unreleased",
                     "--bump",
                     "--context",
@@ -469,7 +561,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.0.0"}));
@@ -591,19 +683,27 @@ pub(crate) mod tests {
 
         // Verify that the `CHANGELOG.md` file contains the new content followed by the existing content.
         changelog_path.assert(indoc! {r#"
-                ## [0.4.0] - 2026-09-27
+            ## [0.4.0] - 2026-09-27
 
-                ### 🐛 Bug Fixes
+            ### 🐛 Bug Fixes
 
-                - *(api)* Handle negative numbers correctly
-                "#});
+            - *(api)* Handle negative numbers correctly
+            "#});
     }
 
     /// Tests that both the current and next versions are returned from the `git-cliff` JSON context.
-    #[test]
-    fn test_get_version_from_git_cliff_context_with_valid_previous_version() {
-        let context = serde_json::json!({"version": "1.1.0", "previous": {"version": "v1.0.1"}});
-        let result = get_version_from_git_cliff_context(&context);
+    #[rstest]
+    #[case::bare("v", "1.0.1", "1.1.0")]
+    #[case::root("v", "v1.0.1", "v1.1.0")]
+    #[case::cli("git-reflow-v", "git-reflow-v1.0.1", "git-reflow-v1.1.0")]
+    #[case::api("git-reflow-api-v", "git-reflow-api-v1.0.1", "git-reflow-api-v1.1.0")]
+    fn test_get_version_from_git_cliff_context_with_valid_previous_version(
+        #[case] prefix: &str,
+        #[case] previous: &str,
+        #[case] next: &str,
+    ) {
+        let context = serde_json::json!({"version": next, "previous": {"version": previous}});
+        let result = get_version_from_git_cliff_context(&context, prefix);
 
         assert_eq!(result.unwrap(), (Some(Version::new(1, 0, 1)), Version::new(1, 1, 0)));
     }
@@ -611,8 +711,8 @@ pub(crate) mod tests {
     /// Tests that a valid next version (with no previous version) is returned from the `git-cliff` JSON context.
     #[test]
     fn test_get_version_from_git_cliff_context_with_valid_version() {
-        let context = serde_json::json!({"version": "1.0.1"});
-        let result = get_version_from_git_cliff_context(&context);
+        let context = serde_json::json!({"version": "example-api-v1.0.1"});
+        let result = get_version_from_git_cliff_context(&context, "example-api-v");
 
         assert_eq!(result.unwrap(), (None, Version::new(1, 0, 1)));
     }
@@ -621,7 +721,7 @@ pub(crate) mod tests {
     #[test]
     fn test_get_version_from_git_cliff_context_with_valid_v_prefixed_version() {
         let context = serde_json::json!({"version": "v1.1.0"});
-        let result = get_version_from_git_cliff_context(&context);
+        let result = get_version_from_git_cliff_context(&context, "v");
 
         assert_eq!(result.unwrap(), (None, Version::new(1, 1, 0)));
     }
@@ -630,7 +730,7 @@ pub(crate) mod tests {
     #[test]
     fn test_get_version_from_git_cliff_context_with_invalid_version() {
         let context = serde_json::json!({"version": "invalid version"});
-        let result = get_version_from_git_cliff_context(&context);
+        let result = get_version_from_git_cliff_context(&context, "v");
 
         assert!(result.is_err());
         assert_eq!(
@@ -643,7 +743,7 @@ pub(crate) mod tests {
     #[test]
     fn test_get_version_from_git_cliff_context_with_invalid_previous_version() {
         let context = serde_json::json!({"version": "1.1.0", "previous": {"version": "invalid version"}});
-        let result = get_version_from_git_cliff_context(&context);
+        let result = get_version_from_git_cliff_context(&context, "v");
 
         assert!(result.is_err());
         assert_eq!(
@@ -656,9 +756,27 @@ pub(crate) mod tests {
     #[test]
     fn test_get_version_from_git_cliff_context_with_missing_version() {
         let context = serde_json::json!({"dummy": "text"});
-        let result = get_version_from_git_cliff_context(&context);
+        let result = get_version_from_git_cliff_context(&context, "v");
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "missing version in git-cliff context");
+    }
+
+    /// Tests that prefixed prerelease and build metadata survive version parsing.
+    #[test]
+    fn test_get_version_from_git_cliff_context_with_metadata() {
+        let context = serde_json::json!({
+            "version": "git-reflow-api-v0.2.0-rc.2+build.2",
+            "previous": {"version": "git-reflow-api-v0.2.0-rc.1+build.1"},
+        });
+        let result = get_version_from_git_cliff_context(&context, "git-reflow-api-v");
+
+        assert_eq!(
+            result.unwrap(),
+            (
+                Some(Version::parse("0.2.0-rc.1+build.1").unwrap()),
+                Version::parse("0.2.0-rc.2+build.2").unwrap(),
+            ),
+        );
     }
 }

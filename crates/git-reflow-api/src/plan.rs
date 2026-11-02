@@ -1,4 +1,5 @@
 use crate::git_cliff::{get_version_from_git_cliff_context, render_changelog_markdown, run_git_cliff};
+use crate::release::build_git_tag_name;
 use crate::settings::{AppConfig, pkg::PackageConfig};
 use crate::strategy::BaseStrategy;
 use anyhow::{Context, bail};
@@ -75,7 +76,8 @@ pub async fn plan_releases(
         }
 
         // Run `git-cliff` in the package directory.
-        let context = match run_git_cliff(&pkg.dir, &extra_commits, None)? {
+        let tag_prefix = build_git_tag_name(pkg, &pkg_name, "")?;
+        let context = match run_git_cliff(&pkg.dir, &tag_prefix, &extra_commits, None)? {
             // If the context contains a bump type, it indicates that there are changes to be released.
             // If the context does not contain a previous version, it also indicates that this is the first release.
             Some(ctx) if !ctx["bump_type"].is_null() || ctx["previous"].is_null() => {
@@ -90,7 +92,7 @@ pub async fn plan_releases(
         };
 
         // Parse the version and render the changelog Markdown for this package.
-        let (current_version, next_version) = get_version_from_git_cliff_context(&context)?;
+        let (current_version, next_version) = get_version_from_git_cliff_context(&context, &tag_prefix)?;
         let changelog_md = render_changelog_markdown(&context, None)?;
 
         // Render the commit message for this package release.
@@ -203,11 +205,19 @@ mod tests {
 
         // Create Git tags for the current versions of the packages.
         let commit = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.tag_lightweight("v1.0.0", commit.as_object(), false).unwrap();
-        repo.tag_lightweight("example-api-v1.0.0", commit.as_object(), false)
-            .unwrap();
-        repo.tag_lightweight("example-cli-v1.0.0", commit.as_object(), false)
-            .unwrap();
+        for tag in [
+            "v1.0.0",
+            "v1.0",
+            "v1",
+            "example-api-v1.0.0",
+            "example-api-v1.0",
+            "example-api-v1",
+            "example-cli-v1.0.0",
+            "example-cli-v1.0",
+            "example-cli-v1",
+        ] {
+            repo.tag_lightweight(tag, commit.as_object(), false).unwrap();
+        }
 
         // Create some changes in the packages and commit those changes.
         let lib_rs_path = project_dir.path().join("crates/example-api/src/lib.rs");
@@ -228,6 +238,7 @@ mod tests {
         assert_eq!(planned[2].package_name, "example-cli");
         assert_eq!(planned[0].current_version, Some(Version::parse("1.0.0").unwrap()));
         assert_eq!(planned[1].current_version, Some(Version::parse("1.0.0").unwrap()));
+        assert_eq!(planned[2].current_version, Some(Version::parse("1.0.0").unwrap()));
         assert_eq!(planned[0].next_version, Version::parse("1.1.0").unwrap());
         assert_eq!(planned[1].next_version, Version::parse("1.1.0").unwrap());
         assert_eq!(planned[2].next_version, Version::parse("1.0.1").unwrap());
