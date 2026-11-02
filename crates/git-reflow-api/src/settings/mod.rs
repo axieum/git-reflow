@@ -1,7 +1,7 @@
 use crate::settings::git::GitConfig;
 use crate::settings::pkg::PackageConfig;
 use crate::strategy::BaseStrategy;
-use anyhow::Context;
+use anyhow::{Context, ensure};
 use config::{Config, Environment, File};
 use std::path::PathBuf;
 use tracing::{debug, trace};
@@ -124,6 +124,24 @@ impl AppConfig {
         self.packages = packages;
         Ok(self)
     }
+
+    /// Validates the configuration.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        // Ensure at most one package has `include-name-in-tag` set to `false`.
+        // NB: This is to prevent Git tag clobbering when multiple packages are configured to use unprefixed tags.
+        ensure!(
+            self.packages.iter().filter(|pkg| !pkg.include_name_in_tag).count() <= 1,
+            r#"Two or more packages would generate unprefixed Git tags, which will cause tag collisions.
+
+To resolve this issue:
+  ├ Ensure at most one `packages[].include-name-in-tag` is set to `false` in your configuration;
+  ⌊ By default, `packages[0].include-name-in-tag` is set to `false`, so you may need to explicitly enable it in your configuration.
+
+For further assistance, run `git reflow help` or visit https://github.com/axieum/git-reflow."#,
+        );
+
+        Ok(())
+    }
 }
 
 /// Loads and parses the configuration.
@@ -186,8 +204,9 @@ pub fn load(config_path: Option<PathBuf>) -> anyhow::Result<AppConfig> {
         );
     }
 
-    // Return the resulting configuration.
+    // Validate and return the resulting configuration.
     trace!("resulting configuration: {result:#?}");
+    result.validate()?;
     Ok(result)
 }
 
@@ -361,5 +380,30 @@ mod tests {
         assert!(config.exclude[0].matches_path(Path::new("crates/example")));
         assert!(!config.exclude[0].matches_path(Path::new("other/example")));
         assert_eq!(serde_json::to_value(&config).unwrap()["exclude"], exclude);
+    }
+
+    /// Tests that the configuration is invalid when multiple packages have `include_name_in_tag` set to `false`.
+    #[test]
+    fn test_validate_with_multiple_include_name_in_tag_false() {
+        let config = AppConfig {
+            packages: vec![
+                PackageConfig {
+                    name: Some("first".to_string()),
+                    include_name_in_tag: false,
+                    ..Default::default()
+                },
+                PackageConfig {
+                    name: Some("second".to_string()),
+                    include_name_in_tag: false,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let error_message = result.unwrap_err().to_string();
+        assert!(error_message.contains("Two or more packages would generate unprefixed Git tags"));
     }
 }
