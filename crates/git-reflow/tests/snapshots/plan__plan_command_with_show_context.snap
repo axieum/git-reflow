@@ -138,7 +138,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
         "statistics": null,
         "submodule_commits": {},
         "timestamp": [COMMIT SHA],
-        "version": "v1.0.0"
+        "version": "1.0.0"
       },
       "repository": "[TEMPDIR]",
       "statistics": {
@@ -149,7 +149,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       },
       "submodule_commits": {},
       "timestamp": [COMMIT SHA],
-      "version": "v1.1.0"
+      "version": "1.1.0"
     }
   },
   {
@@ -287,7 +287,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
         "statistics": null,
         "submodule_commits": {},
         "timestamp": [COMMIT SHA],
-        "version": "v1.0.0"
+        "version": "1.0.0"
       },
       "repository": "[TEMPDIR]",
       "statistics": {
@@ -298,7 +298,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       },
       "submodule_commits": {},
       "timestamp": [COMMIT SHA],
-      "version": "v1.1.0"
+      "version": "1.1.0"
     }
   },
   {
@@ -438,7 +438,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
         "statistics": null,
         "submodule_commits": {},
         "timestamp": [COMMIT SHA],
-        "version": "v1.0.0"
+        "version": "1.0.0"
       },
       "repository": null,
       "statistics": {
@@ -449,7 +449,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       },
       "submodule_commits": {},
       "timestamp": [COMMIT SHA],
-      "version": "v1.0.1"
+      "version": "1.0.1"
     }
   }
 ]
