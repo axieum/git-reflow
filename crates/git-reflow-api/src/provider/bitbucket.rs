@@ -15,11 +15,11 @@ pub struct BitbucketProvider {
     /// **Default:** api.bitbucket.org
     #[serde(default = "default_host")]
     pub host: String,
-    /// Whether to commit changes and create release tags via the Bitbucket API instead of using the local Git client.
+    /// Whether to create release tags via the Bitbucket API instead of using the local Git client.
     ///
     /// **Default:** `true`
-    #[serde(default = "default_commit_via_api")]
-    pub commit_via_api: bool,
+    #[serde(default = "default_tag_via_api")]
+    pub tag_via_api: bool,
     /// The [`reqwest`] client used to interact with the Bitbucket API.
     ///
     /// **See Also:** [`BitbucketProvider::client`]
@@ -35,8 +35,8 @@ fn default_host() -> String {
     String::from("api.bitbucket.org")
 }
 
-/// Returns the default value for `$.commit_via_api`.
-fn default_commit_via_api() -> bool {
+/// Returns the default value for `$.tag_via_api`.
+fn default_tag_via_api() -> bool {
     true
 }
 
@@ -44,7 +44,7 @@ impl Default for BitbucketProvider {
     fn default() -> Self {
         Self {
             host: default_host(),
-            commit_via_api: default_commit_via_api(),
+            tag_via_api: default_tag_via_api(),
             client: OnceLock::new(),
             base_url: OnceLock::new(),
         }
@@ -106,6 +106,11 @@ impl BitbucketProvider {
             .context("failed to join endpoint path")
     }
 
+    /// Returns whether to use the Bitbucket Cloud API (true) or Bitbucket Data Center API (false) for the host.
+    fn is_cloud(&self) -> bool {
+        self.host == "api.bitbucket.org" || env::var("BITBUCKET_CLOUD").is_ok_and(|value| value == "1")
+    }
+
     /// Creates an annotated Git tag via Bitbucket at the given commit SHA, replacing the remote tag
     /// if it already exists.
     ///
@@ -123,7 +128,7 @@ impl BitbucketProvider {
     ///
     /// A result indicating whether the tag was created successfully.
     pub async fn tag(&self, owner: &str, repo: &str, name: &str, commit_sha: &str) -> anyhow::Result<()> {
-        if self.host == "api.bitbucket.org" {
+        if self.is_cloud() {
             self.tag_via_cloud(owner, repo, name, commit_sha).await
         } else {
             self.tag_via_data_center(owner, repo, name, commit_sha).await
@@ -817,7 +822,7 @@ impl BaseGitProvider for BitbucketProvider {
         repo: &str,
         commit: &str,
     ) -> anyhow::Result<Vec<PullRequest>> {
-        if self.host == "api.bitbucket.org" {
+        if self.is_cloud() {
             self.associated_pull_requests_via_cloud(owner, repo, commit).await
         } else {
             self.associated_pull_requests_via_data_center(owner, repo, commit).await
@@ -833,7 +838,7 @@ impl BaseGitProvider for BitbucketProvider {
         title: &str,
         body: &str,
     ) -> anyhow::Result<PullRequest> {
-        if self.host == "api.bitbucket.org" {
+        if self.is_cloud() {
             self.upsert_pull_request_via_cloud(owner, repo, head, base, title, body)
                 .await
         } else {
@@ -944,6 +949,23 @@ pub mod tests {
             endpoint.as_str(),
             "https://bb.example.com/2.0/repositories/axieum/Hello-World",
         );
+    }
+
+    /// Tests that the provider correctly identifies whether the host is for Bitbucket Cloud or Data Center.
+    #[rstest]
+    #[case::cloud("api.bitbucket.org", None, true)]
+    #[case::data_center("bb.example.com", None, false)]
+    #[case::custom_forced_cloud("localhost:1234", Some("1"), true)]
+    #[tokio::test]
+    async fn test_is_cloud(#[case] host: &str, #[case] env_var: Option<&str>, #[case] expected: bool) {
+        if let Some(value) = env_var {
+            unsafe { std::env::set_var("BITBUCKET_CLOUD", value) }
+        }
+        let provider = BitbucketProvider {
+            host: host.to_string(),
+            ..Default::default()
+        };
+        assert_eq!(provider.is_cloud(), expected);
     }
 
     /// Tests that a Git tag is created on Bitbucket Cloud against the given commit SHA.
