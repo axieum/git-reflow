@@ -249,20 +249,224 @@ impl BitbucketProvider {
 
         Ok(())
     }
-}
 
-#[async_trait]
-impl BaseGitProvider for BitbucketProvider {
-    async fn associated_pull_requests(
+    /// Finds pull requests associated with a given commit SHA on Bitbucket Cloud.
+    ///
+    /// See: [Bitbucket Cloud API Documentation](https://developer.atlassian.com/cloud/bitbucket/rest/api-group-pullrequests/#api-repositories-workspace-repo-slug-commit-commit-pullrequests-get)
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner of the repository (user or organisation).
+    /// * `repo` - The name of the repository.
+    /// * `commit` - The commit SHA to search for associated pull requests.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of pull requests associated with the given commit SHA, if any.
+    pub async fn associated_pull_requests_via_cloud(
         &self,
-        _owner: &str,
-        _repo: &str,
-        _commit: &str,
+        owner: &str,
+        repo: &str,
+        commit: &str,
     ) -> anyhow::Result<Vec<PullRequest>> {
-        todo!();
+        #[derive(serde::Deserialize)]
+        struct Response {
+            values: Vec<CloudPullRequest>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct CloudPullRequest {
+            id: u64,
+            title: String,
+            summary: Summary,
+            links: Links,
+            source: BranchReference,
+            destination: BranchReference,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Summary {
+            raw: Option<String>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Links {
+            html: Link,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Link {
+            href: String,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct BranchReference {
+            branch: Branch,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Branch {
+            name: String,
+        }
+
+        let client = self.client()?;
+        let endpoint = self.endpoint(&format!(
+            "2.0/repositories/{}/{}/commit/{}/pullrequests",
+            owner, repo, commit
+        ))?;
+
+        // Find all pull requests associated with the given commit SHA.
+        trace!("find pull requests associated with commit `{commit}`");
+        let prs = client
+            .get(endpoint)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .with_context(|| {
+                format!("could not list associated pull requests via Bitbucket Cloud for commit `{commit}`")
+            })?
+            .json::<Response>()
+            .await
+            .with_context(|| {
+                format!("could not parse associated pull requests from Bitbucket Cloud for commit `{commit}`")
+            })?
+            .values
+            .into_iter()
+            .map(|pr| PullRequest {
+                number: pr.id,
+                url: pr.links.html.href,
+                title: pr.title,
+                body: pr.summary.raw,
+                head: pr.source.branch.name,
+                base: pr.destination.branch.name,
+                existing: true,
+                packages: vec![],
+            })
+            .collect::<Vec<PullRequest>>();
+
+        trace!("found {} associated pull requests for commit `{commit}`", prs.len());
+        Ok(prs)
     }
 
-    async fn upsert_pull_request(
+    /// Finds pull requests associated with a given commit SHA on Bitbucket Data Center.
+    ///
+    /// See: [Bitbucket Server API Documentation](https://developer.atlassian.com/server/bitbucket/rest/v1005/api-group-pull-requests/#api-api-latest-projects-projectkey-repos-repositoryslug-commits-commitid-pull-requests-get)
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner of the repository (user or organisation).
+    /// * `repo` - The name of the repository.
+    /// * `commit` - The commit SHA to search for associated pull requests.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a list of pull requests associated with the given commit SHA, if any.
+    pub async fn associated_pull_requests_via_data_center(
+        &self,
+        owner: &str,
+        repo: &str,
+        commit: &str,
+    ) -> anyhow::Result<Vec<PullRequest>> {
+        #[derive(serde::Deserialize)]
+        struct Response {
+            values: Vec<DataCenterPullRequest>,
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct DataCenterPullRequest {
+            id: u64,
+            title: String,
+            description: Option<String>,
+            links: Links,
+            from_ref: BranchReference,
+            to_ref: BranchReference,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Links {
+            #[serde(rename = "self")]
+            self_links: Vec<Link>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Link {
+            href: String,
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct BranchReference {
+            display_id: String,
+        }
+
+        let client = self.client()?;
+        let endpoint = self.endpoint(&format!(
+            "rest/api/latest/projects/{}/repos/{}/commits/{}/pull-requests",
+            owner, repo, commit
+        ))?;
+
+        // Find all pull requests associated with the given commit SHA.
+        trace!("find pull requests associated with commit `{commit}`");
+        let prs = client
+            .get(endpoint)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .with_context(|| {
+                format!("could not list associated pull requests via Bitbucket Data Center for commit `{commit}`")
+            })?
+            .json::<Response>()
+            .await
+            .with_context(|| {
+                format!("could not parse associated pull requests from Bitbucket Data Center for commit `{commit}`")
+            })?
+            .values
+            .into_iter()
+            .map(|pr| {
+                let url = pr
+                    .links
+                    .self_links
+                    .into_iter()
+                    .next()
+                    .with_context(|| format!("missing URL for Bitbucket Data Center pull request #{}", pr.id))?
+                    .href;
+                Ok(PullRequest {
+                    number: pr.id,
+                    url,
+                    title: pr.title,
+                    body: pr.description,
+                    head: pr.from_ref.display_id,
+                    base: pr.to_ref.display_id,
+                    existing: true,
+                    packages: vec![],
+                })
+            })
+            .collect::<anyhow::Result<Vec<PullRequest>>>()?;
+
+        trace!("found {} associated pull requests for commit `{commit}`", prs.len());
+        Ok(prs)
+    }
+
+    /// Creates or updates a pull request on Bitbucket Cloud.
+    ///
+    /// See: [Bitbucket Cloud API Documentation](https://developer.atlassian.com/cloud/bitbucket/rest/api-group-pullrequests/#api-repositories-workspace-repo-slug-pullrequests-post)
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner of the repository (user or organisation).
+    /// * `repo` - The name of the repository.
+    /// * `head` - The name of the branch where your changes are implemented.
+    /// * `base` - The name of the branch you want the changes pulled into.
+    /// * `title` - The title of the pull request.
+    /// * `body` - The body content of the pull request.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the pull request number, URL, and whether it was created or updated.
+    pub async fn upsert_pull_request_via_cloud(
         &self,
         _owner: &str,
         _repo: &str,
@@ -274,16 +478,79 @@ impl BaseGitProvider for BitbucketProvider {
         todo!();
     }
 
-    async fn upsert_release(
+    /// Creates or updates a pull request on Bitbucket Data Center.
+    ///
+    /// See: [Bitbucket Server API Documentation](https://developer.atlassian.com/server/bitbucket/rest/v1005/api-group-pull-requests/#api-api-latest-projects-projectkey-repos-repositoryslug-pull-requests-post)
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner of the repository (user or organisation).
+    /// * `repo` - The name of the repository.
+    /// * `head` - The name of the branch where your changes are implemented.
+    /// * `base` - The name of the branch you want the changes pulled into.
+    /// * `title` - The title of the pull request.
+    /// * `body` - The body content of the pull request.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the pull request number, URL, and whether it was created or updated.
+    pub async fn upsert_pull_request_via_data_center(
         &self,
         _owner: &str,
         _repo: &str,
+        _head: &str,
+        _base: &str,
+        _title: &str,
+        _body: &str,
+    ) -> anyhow::Result<PullRequest> {
+        todo!();
+    }
+}
+
+#[async_trait]
+impl BaseGitProvider for BitbucketProvider {
+    async fn associated_pull_requests(
+        &self,
+        owner: &str,
+        repo: &str,
+        commit: &str,
+    ) -> anyhow::Result<Vec<PullRequest>> {
+        if self.host == "api.bitbucket.org" {
+            self.associated_pull_requests_via_cloud(owner, repo, commit).await
+        } else {
+            self.associated_pull_requests_via_data_center(owner, repo, commit).await
+        }
+    }
+
+    async fn upsert_pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> anyhow::Result<PullRequest> {
+        if self.host == "api.bitbucket.org" {
+            self.upsert_pull_request_via_cloud(owner, repo, head, base, title, body)
+                .await
+        } else {
+            self.upsert_pull_request_via_data_center(owner, repo, head, base, title, body)
+                .await
+        }
+    }
+
+    async fn upsert_release(
+        &self,
+        owner: &str,
+        repo: &str,
         _tag_name: &str,
         _commit_sha: &str,
         _title: &str,
         _body: &str,
         _make_latest: bool,
     ) -> anyhow::Result<String> {
+        trace!("skip release creation via Bitbucket for `{owner}/{repo}` - not supported");
         todo!();
     }
 }
@@ -383,6 +650,7 @@ pub mod tests {
     async fn test_tag_via_cloud(provider: BitbucketProvider) {
         // Set up a mock server to simulate the Bitbucket Cloud API.
         let server = mock_reqwest(&provider).await;
+        let commit_sha = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
         let get_tag_mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/2.0/repositories/axieum/Hello-World/refs/tags/v1.0.0")
@@ -397,25 +665,18 @@ pub mod tests {
                 .json_body(json!({
                     "message": "v1.0.0",
                     "name": "v1.0.0",
-                    "target": { "hash": "6dcb09b5b57875f334f61aebed695e2e4193db5e" },
+                    "target": { "hash": commit_sha },
                 }));
             then.status(201).json_body(json!({
                 "message": "v1.0.0",
                 "name": "v1.0.0",
-                "target": { "hash": "6dcb09b5b57875f334f61aebed695e2e4193db5e" },
+                "target": { "hash": commit_sha },
                 "type": "TAG",
             }));
         });
 
         // Create a tag against the given commit SHA.
-        let result = provider
-            .tag(
-                "axieum",
-                "Hello-World",
-                "v1.0.0",
-                "6dcb09b5b57875f334f61aebed695e2e4193db5e",
-            )
-            .await;
+        let result = provider.tag("axieum", "Hello-World", "v1.0.0", commit_sha).await;
 
         // Ensure the annotated tag was created successfully.
         get_tag_mock.assert_async().await;
@@ -429,6 +690,7 @@ pub mod tests {
     async fn test_tag_via_cloud_with_existing_tag(provider: BitbucketProvider) {
         // Set up a mock server to simulate the Bitbucket Cloud API.
         let server = mock_reqwest(&provider).await;
+        let commit_sha = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
         let get_tag_mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/2.0/repositories/axieum/Hello-World/refs/tags/v1.0.0")
@@ -437,10 +699,10 @@ pub mod tests {
         });
         let get_commit_mock = server.mock(|when, then| {
             when.method(GET)
-                .path("/2.0/repositories/axieum/Hello-World/commit/6dcb09b5b57875f334f61aebed695e2e4193db5e")
+                .path(&format!("/2.0/repositories/axieum/Hello-World/commit/{commit_sha}"))
                 .header("Accept", "application/json");
             then.status(200).json_body(json!({
-                "hash": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+                "hash": commit_sha,
                 "type": "commit",
             }));
         });
@@ -457,25 +719,18 @@ pub mod tests {
                 .json_body(json!({
                     "message": "v1.0.0",
                     "name": "v1.0.0",
-                    "target": { "hash": "6dcb09b5b57875f334f61aebed695e2e4193db5e" },
+                    "target": { "hash": commit_sha },
                 }));
             then.status(201).json_body(json!({
                 "message": "v1.0.0",
                 "name": "v1.0.0",
-                "target": { "hash": "6dcb09b5b57875f334f61aebed695e2e4193db5e" },
+                "target": { "hash": commit_sha },
                 "type": "TAG",
             }));
         });
 
         // Create a tag against the given commit SHA.
-        let result = provider
-            .tag(
-                "axieum",
-                "Hello-World",
-                "v1.0.0",
-                "6dcb09b5b57875f334f61aebed695e2e4193db5e",
-            )
-            .await;
+        let result = provider.tag("axieum", "Hello-World", "v1.0.0", commit_sha).await;
 
         // Ensure the annotated tag was created successfully.
         get_tag_mock.assert_async().await;
@@ -491,6 +746,7 @@ pub mod tests {
     async fn test_tag_via_data_center(#[with("bb.example.com")] provider: BitbucketProvider) {
         // Set up a mock server to simulate the Bitbucket Data Center API.
         let server = mock_reqwest(&provider).await;
+        let commit_sha = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
         let tag_mock = server.mock(|when, then| {
             when.method(POST)
                 .path("/rest/git/latest/projects/axieum/repos/Hello-World/tags")
@@ -500,29 +756,158 @@ pub mod tests {
                     "force": true,
                     "message": "v1.0.0",
                     "name": "v1.0.0",
-                    "startPoint": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+                    "startPoint": commit_sha,
                     "type": "ANNOTATED",
                 }));
             then.status(201).json_body(json!({
                 "id": "refs/tags/v1.0.0",
                 "displayId": "v1.0.0",
-                "latestCommit": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+                "latestCommit": commit_sha,
                 "type": "TAG",
             }));
         });
 
         // Create a tag against the given commit SHA.
-        let result = provider
-            .tag(
-                "axieum",
-                "Hello-World",
-                "v1.0.0",
-                "6dcb09b5b57875f334f61aebed695e2e4193db5e",
-            )
-            .await;
+        let result = provider.tag("axieum", "Hello-World", "v1.0.0", commit_sha).await;
 
         // Ensure the annotated tag was created successfully.
         tag_mock.assert_async().await;
         result.unwrap();
+    }
+
+    /// Tests that associated pull requests are returned from Bitbucket Cloud for a given commit SHA.
+    #[rstest]
+    #[tokio::test]
+    async fn test_associated_pull_requests_via_cloud(provider: BitbucketProvider) {
+        // Set up a mock server to simulate the Bitbucket Cloud API.
+        let server = mock_reqwest(&provider).await;
+        let commit_sha = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
+        let commit_pulls_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path(&format!(
+                    "/2.0/repositories/axieum/Hello-World/commit/{commit_sha}/pullrequests"
+                ))
+                .header("Accept", "application/json");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!("../../tests/fixtures/bitbucket_cloud_commit_pulls.json"));
+        });
+
+        // Find associated pull requests for a commit SHA.
+        let prs = provider
+            .associated_pull_requests("axieum", "Hello-World", commit_sha)
+            .await;
+
+        // Ensure the associated pull requests were retrieved successfully.
+        commit_pulls_mock.assert_async().await;
+        assert_eq!(
+            prs.unwrap(),
+            vec![PullRequest {
+                number: 1347,
+                url: "https://bitbucket.org/axieum/Hello-World/pull-requests/1347".to_string(),
+                title: "Amazing new feature".to_string(),
+                body: Some("Please pull these awesome changes in!".to_string()),
+                head: "new-topic".to_string(),
+                base: "master".to_string(),
+                existing: true,
+                packages: vec![],
+            }],
+        );
+    }
+
+    /// Tests that no associated pull requests are returned from Bitbucket Cloud for a given commit SHA when none exist.
+    #[rstest]
+    #[tokio::test]
+    async fn test_associated_pull_requests_via_cloud_when_none_exist(provider: BitbucketProvider) {
+        // Set up a mock server to simulate the Bitbucket Cloud API.
+        let server = mock_reqwest(&provider).await;
+        let commit_sha = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
+        let commit_pulls_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path(&format!(
+                    "/2.0/repositories/axieum/Hello-World/commit/{commit_sha}/pullrequests"
+                ))
+                .header("Accept", "application/json");
+            then.status(200).json_body(json!({ "values": [] }));
+        });
+
+        // Find associated pull requests for a commit SHA.
+        let prs = provider
+            .associated_pull_requests("axieum", "Hello-World", commit_sha)
+            .await;
+
+        // Ensure the associated pull requests were retrieved successfully.
+        commit_pulls_mock.assert_async().await;
+        assert!(prs.unwrap().is_empty());
+    }
+
+    /// Tests that associated pull requests are returned from Bitbucket Data Center for a given commit SHA.
+    #[rstest]
+    #[tokio::test]
+    async fn test_associated_pull_requests_via_data_center(#[with("bb.example.com")] provider: BitbucketProvider) {
+        // Set up a mock server to simulate the Bitbucket Data Center API.
+        let server = mock_reqwest(&provider).await;
+        let commit_sha = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
+        let commit_pulls_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path(&format!(
+                    "/rest/api/latest/projects/axieum/repos/Hello-World/commits/{commit_sha}/pull-requests"
+                ))
+                .header("Accept", "application/json");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!(
+                    "../../tests/fixtures/bitbucket_data_center_commit_pulls.json"
+                ));
+        });
+
+        // Find associated pull requests for a commit SHA.
+        let prs = provider
+            .associated_pull_requests("axieum", "Hello-World", commit_sha)
+            .await;
+
+        // Ensure the associated pull requests were retrieved successfully.
+        commit_pulls_mock.assert_async().await;
+        assert_eq!(
+            prs.unwrap(),
+            vec![PullRequest {
+                number: 1347,
+                url: "https://bb.example.com/projects/axieum/repos/Hello-World/pull-requests/1347".to_string(),
+                title: "Amazing new feature".to_string(),
+                body: Some("Please pull these awesome changes in!".to_string()),
+                head: "new-topic".to_string(),
+                base: "master".to_string(),
+                existing: true,
+                packages: vec![],
+            }],
+        );
+    }
+
+    /// Tests that no associated pull requests are returned from Bitbucket Data Center for a given commit SHA when none exist.
+    #[rstest]
+    #[tokio::test]
+    async fn test_associated_pull_requests_via_data_center_when_none_exist(
+        #[with("bb.example.com")] provider: BitbucketProvider,
+    ) {
+        // Set up a mock server to simulate the Bitbucket Data Center API.
+        let server = mock_reqwest(&provider).await;
+        let commit_sha = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
+        let commit_pulls_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path(&format!(
+                    "/rest/api/latest/projects/axieum/repos/Hello-World/commits/{commit_sha}/pull-requests"
+                ))
+                .header("Accept", "application/json");
+            then.status(200).json_body(json!({ "values": [] }));
+        });
+
+        // Find associated pull requests for a commit SHA.
+        let prs = provider
+            .associated_pull_requests("axieum", "Hello-World", commit_sha)
+            .await;
+
+        // Ensure the associated pull requests were retrieved successfully.
+        commit_pulls_mock.assert_async().await;
+        assert!(prs.unwrap().is_empty());
     }
 }

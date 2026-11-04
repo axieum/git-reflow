@@ -1,0 +1,118 @@
+{
+  "size": 1,
+  "page": 1,
+  "pagelen": 10,
+  "values": [
+    {
+      "type": "<string>",
+      "links": {
+        "self": {
+          "href": "<string>",
+          "name": "<string>"
+        },
+        "html": {
+          "href": "https://bitbucket.org/axieum/Hello-World/pull-requests/1347",
+          "name": "<string>"
+        },
+        "commits": {
+          "href": "<string>",
+          "name": "<string>"
+        },
+        "approve": {
+          "href": "<string>",
+          "name": "<string>"
+        },
+        "diff": {
+          "href": "<string>",
+          "name": "<string>"
+        },
+        "diffstat": {
+          "href": "<string>",
+          "name": "<string>"
+        },
+        "comments": {
+          "href": "<string>",
+          "name": "<string>"
+        },
+        "activity": {
+          "href": "<string>",
+          "name": "<string>"
+        },
+        "merge": {
+          "href": "<string>",
+          "name": "<string>"
+        },
+        "decline": {
+          "href": "<string>",
+          "name": "<string>"
+        },
+        "mergeability_checks": {
+          "href": "<string>",
+          "name": "<string>"
+        }
+      },
+      "id": 1347,
+      "title": "Amazing new feature",
+      "rendered": {
+        "title": {
+          "raw": "<string>",
+          "markup": "markdown",
+          "html": "<string>"
+        },
+        "description": {
+          "raw": "<string>",
+          "markup": "markdown",
+          "html": "<string>"
+        },
+        "reason": {
+          "raw": "<string>",
+          "markup": "markdown",
+          "html": "<string>"
+        }
+      },
+      "summary": {
+        "raw": "Please pull these awesome changes in!",
+        "markup": "markdown",
+        "html": "<string>"
+      },
+      "state": "OPEN",
+      "author": {
+        "type": "<string>"
+      },
+      "source": {
+        "branch": {
+          "name": "new-topic"
+        }
+      },
+      "destination": {
+        "branch": {
+          "name": "master"
+        }
+      },
+      "merge_commit": {
+        "hash": "<string>"
+      },
+      "comment_count": 51,
+      "task_count": 53,
+      "close_source_branch": true,
+      "closed_by": {
+        "type": "<string>"
+      },
+      "reason": "<string>",
+      "created_on": "<string>",
+      "updated_on": "<string>",
+      "reviewers": [
+        {
+          "type": "<string>"
+        }
+      ],
+      "participants": [
+        {
+          "type": "<string>"
+        }
+      ],
+      "draft": true,
+      "queued": true
+    }
+  ]
+}
