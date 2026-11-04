@@ -19,7 +19,7 @@
   - [GitHub]
   - [GitLab] (coming soon)
   - [Gitea] (coming soon)
-  - [Bitbucket] (coming soon)
+  - [Bitbucket]
 
 ## Installation
 
