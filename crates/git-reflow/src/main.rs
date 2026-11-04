@@ -58,10 +58,12 @@ async fn main() -> anyhow::Result<()> {
                 tracing_subscriber::EnvFilter::builder()
                     .with_default_directive(cli.verbose.log_level_filter().as_trace().into())
                     .from_env_lossy()
+                    .add_directive("h2=warn".parse().unwrap())
                     .add_directive("handlebars=warn".parse().unwrap())
                     .add_directive("hyper_rustls=warn".parse().unwrap())
                     .add_directive("hyper_util=warn".parse().unwrap())
                     .add_directive("octocrab=warn".parse().unwrap())
+                    .add_directive("reqwest=warn".parse().unwrap())
                     .add_directive("rustls=warn".parse().unwrap())
                     .add_directive("tower=warn".parse().unwrap())
             }),

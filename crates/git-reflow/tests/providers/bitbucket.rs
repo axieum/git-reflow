@@ -23,10 +23,10 @@ fn test_pr_command_via_cloud(#[with("example-rust-workspace")] project_repo: (Te
     let list_mock = server.mock(|when, then| {
         when.method(GET)
             .path("/2.0/repositories/axieum/Hello-World/pullrequests")
-            .query_param("state", "OPEN")
             .query_param(
                 "q",
                 concat!(
+                    r#"state = "OPEN" AND "#,
                     r#"source.repository.full_name = "axieum/Hello-World" AND "#,
                     r#"source.branch.name = "reflow--branches--main" AND destination.branch.name = "main""#,
                 ),
@@ -120,10 +120,10 @@ fn test_pr_command_via_cloud_creates_separate_pull_requests(
         server.mock(|when, then| {
             when.method(GET)
                 .path("/2.0/repositories/axieum/Hello-World/pullrequests")
-                .query_param("state", "OPEN")
                 .query_param(
                     "q",
                     concat!(
+                        r#"state = "OPEN" AND "#,
                         r#"source.repository.full_name = "axieum/Hello-World" AND "#,
                         r#"source.branch.name = "reflow--branches--main--example-rust-workspace" AND "#,
                         r#"destination.branch.name = "main""#,
@@ -151,10 +151,10 @@ fn test_pr_command_via_cloud_creates_separate_pull_requests(
         server.mock(|when, then| {
             when.method(GET)
                 .path("/2.0/repositories/axieum/Hello-World/pullrequests")
-                .query_param("state", "OPEN")
                 .query_param(
                     "q",
                     concat!(
+                        r#"state = "OPEN" AND "#,
                         r#"source.repository.full_name = "axieum/Hello-World" AND "#,
                         r#"source.branch.name = "reflow--branches--main--example-api" AND "#,
                         r#"destination.branch.name = "main""#,
@@ -182,10 +182,10 @@ fn test_pr_command_via_cloud_creates_separate_pull_requests(
         server.mock(|when, then| {
             when.method(GET)
                 .path("/2.0/repositories/axieum/Hello-World/pullrequests")
-                .query_param("state", "OPEN")
                 .query_param(
                     "q",
                     concat!(
+                        r#"state = "OPEN" AND "#,
                         r#"source.repository.full_name = "axieum/Hello-World" AND "#,
                         r#"source.branch.name = "reflow--branches--main--example-cli" AND "#,
                         r#"destination.branch.name = "main""#,
@@ -295,10 +295,10 @@ fn test_pr_command_via_cloud_noop_when_remote_is_up_to_date(
     let list_mock = server.mock(|when, then| {
         when.method(GET)
             .path("/2.0/repositories/axieum/Hello-World/pullrequests")
-            .query_param("state", "OPEN")
             .query_param(
                 "q",
                 concat!(
+                    r#"state = "OPEN" AND "#,
                     r#"source.repository.full_name = "axieum/Hello-World" AND "#,
                     r#"source.branch.name = "reflow--branches--main" AND destination.branch.name = "main""#,
                 ),
@@ -943,17 +943,24 @@ fn test_release_command_via_cloud(#[with("example-rust-workspace")] project_repo
     // Mock the release pull request associated with the current commit.
     // NB: Bitbucket does not support provider releases.
     let commit_pulls_mock = server.mock(|when, then| {
-        let mut body: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_commit_pulls.json"
-        ))
-        .unwrap();
-        body["values"][0]["source"]["branch"]["name"] = json!("reflow--branches--main");
-        body["values"][0]["destination"]["branch"]["name"] = json!("main");
-        body["values"][0]["summary"]["raw"] = json!(build_pull_request_body(packages).unwrap());
-
         when.method(GET).path(format!(
             "/2.0/repositories/axieum/Hello-World/commit/{head}/pullrequests"
         ));
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(include_str!(
+                "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_commit_pulls.json"
+            ));
+    });
+    let pull_mock = server.mock(|when, then| {
+        let mut body: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_pulls_retrieve.json"
+        ))
+        .unwrap();
+        body["summary"]["raw"] = json!(build_pull_request_body(packages).unwrap());
+
+        when.method(GET)
+            .path("/2.0/repositories/axieum/Hello-World/pullrequests/1347");
         then.status(200)
             .header("content-type", "application/json")
             .json_body(body);
@@ -970,6 +977,7 @@ fn test_release_command_via_cloud(#[with("example-rust-workspace")] project_repo
 
     // Verify that the release pull request was retrieved successfully.
     commit_pulls_mock.assert_calls(1);
+    pull_mock.assert_calls(1);
     let assert = assert.success();
 
     // Verify the Git repository state remains unchanged, and that all release tags were pushed up.
@@ -1076,17 +1084,24 @@ fn test_release_command_via_cloud_tags_via_api(#[with("example-rust-workspace")]
 
     // Mock the release pull request associated with the current commit.
     let commit_pulls_mock = server.mock(|when, then| {
-        let mut body: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_commit_pulls.json"
-        ))
-        .unwrap();
-        body["values"][0]["source"]["branch"]["name"] = json!("reflow--branches--main");
-        body["values"][0]["destination"]["branch"]["name"] = json!("main");
-        body["values"][0]["summary"]["raw"] = json!(build_pull_request_body(packages).unwrap());
-
         when.method(GET).path(format!(
             "/2.0/repositories/axieum/Hello-World/commit/{head}/pullrequests"
         ));
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(include_str!(
+                "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_commit_pulls.json"
+            ));
+    });
+    let pull_mock = server.mock(|when, then| {
+        let mut body: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_pulls_retrieve.json"
+        ))
+        .unwrap();
+        body["summary"]["raw"] = json!(build_pull_request_body(packages).unwrap());
+
+        when.method(GET)
+            .path("/2.0/repositories/axieum/Hello-World/pullrequests/1347");
         then.status(200).json_body(body);
     });
 
@@ -1128,6 +1143,7 @@ fn test_release_command_via_cloud_tags_via_api(#[with("example-rust-workspace")]
 
     // Verify that the release pull request was retrieved and all Git tags were created via the API.
     commit_pulls_mock.assert_calls(1);
+    pull_mock.assert_calls(1);
     for mock in server_mocks {
         mock.assert_calls(1);
     }
@@ -1173,17 +1189,24 @@ fn test_release_command_via_cloud_noop_when_already_released(
     // Mock the release pull request associated with the current commit.
     // NB: We don't expect any tags to be retrieved or created via the API for the already released package.
     let commit_pulls_mock = server.mock(|when, then| {
-        let mut body: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_commit_pulls.json"
-        ))
-        .unwrap();
-        body["values"][0]["source"]["branch"]["name"] = json!("reflow--branches--main");
-        body["values"][0]["destination"]["branch"]["name"] = json!("main");
-        body["values"][0]["summary"]["raw"] = json!(build_pull_request_body([pkg]).unwrap());
-
         when.method(GET).path(format!(
             "/2.0/repositories/axieum/Hello-World/commit/{head}/pullrequests"
         ));
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(include_str!(
+                "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_commit_pulls.json"
+            ));
+    });
+    let pull_mock = server.mock(|when, then| {
+        let mut body: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_pulls_retrieve.json"
+        ))
+        .unwrap();
+        body["summary"]["raw"] = json!(build_pull_request_body([pkg]).unwrap());
+
+        when.method(GET)
+            .path("/2.0/repositories/axieum/Hello-World/pullrequests/1347");
         then.status(200)
             .header("content-type", "application/json")
             .json_body(body);
@@ -1225,6 +1248,7 @@ fn test_release_command_via_cloud_noop_when_already_released(
 
     // Verify that no tags were retrieved or created via the API for the already released package.
     commit_pulls_mock.assert_calls(1);
+    pull_mock.assert_calls(1);
     get_mock.assert_calls(0);
     create_mock.assert_calls(0);
 }
@@ -1261,17 +1285,24 @@ fn test_release_command_via_cloud_with_dry_run(#[with("example-rust-workspace")]
     // Mock the release pull request associated with the current commit.
     // NB: We don't expect any tags to be retrieved or created via the API during a dry run.
     let commit_pulls_mock = server.mock(|when, then| {
-        let mut body: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_commit_pulls.json"
-        ))
-        .unwrap();
-        body["values"][0]["source"]["branch"]["name"] = json!("reflow--branches--main");
-        body["values"][0]["destination"]["branch"]["name"] = json!("main");
-        body["values"][0]["summary"]["raw"] = json!(build_pull_request_body([pkg]).unwrap());
-
         when.method(GET).path(format!(
             "/2.0/repositories/axieum/Hello-World/commit/{head}/pullrequests"
         ));
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(include_str!(
+                "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_commit_pulls.json"
+            ));
+    });
+    let pull_mock = server.mock(|when, then| {
+        let mut body: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../git-reflow-api/tests/fixtures/bitbucket_cloud_pulls_retrieve.json"
+        ))
+        .unwrap();
+        body["summary"]["raw"] = json!(build_pull_request_body([pkg]).unwrap());
+
+        when.method(GET)
+            .path("/2.0/repositories/axieum/Hello-World/pullrequests/1347");
         then.status(200)
             .header("content-type", "application/json")
             .json_body(body);
@@ -1305,6 +1336,7 @@ fn test_release_command_via_cloud_with_dry_run(#[with("example-rust-workspace")]
 
     // Verify that no tags were retrieved or created via the API during the dry run.
     commit_pulls_mock.assert_calls(1);
+    pull_mock.assert_calls(1);
     get_mock.assert_calls(0);
     create_mock.assert_calls(0);
 

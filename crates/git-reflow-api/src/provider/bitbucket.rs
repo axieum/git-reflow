@@ -276,7 +276,12 @@ impl BitbucketProvider {
     ) -> anyhow::Result<Vec<PullRequest>> {
         #[derive(serde::Deserialize)]
         struct Response {
-            values: Vec<CloudPullRequest>,
+            values: Vec<PullRequestId>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct PullRequestId {
+            id: u64,
         }
 
         #[derive(serde::Deserialize)]
@@ -322,7 +327,7 @@ impl BitbucketProvider {
 
         // Find all pull requests associated with the given commit SHA.
         trace!("find pull requests associated with commit `{commit}`");
-        let prs = client
+        let response = client
             .get(endpoint)
             .header("Accept", "application/json")
             .send()
@@ -335,10 +340,28 @@ impl BitbucketProvider {
             .await
             .with_context(|| {
                 format!("could not parse associated pull requests from Bitbucket Cloud for commit `{commit}`")
-            })?
-            .values
-            .into_iter()
-            .map(|pr| PullRequest {
+            })?;
+
+        let mut prs = Vec::with_capacity(response.values.len());
+        for pr in response.values {
+            let id = pr.id;
+            trace!("fetch pull request #{id} associated with commit `{commit}`");
+            let pr = client
+                .get(self.endpoint(&format!("2.0/repositories/{}/{}/pullrequests/{}", owner, repo, id))?)
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+                .with_context(|| {
+                    format!("could not retrieve pull request #{id} via Bitbucket Cloud on `{owner}/{repo}`")
+                })?
+                .json::<CloudPullRequest>()
+                .await
+                .with_context(|| {
+                    format!("could not parse pull request #{id} from Bitbucket Cloud on `{owner}/{repo}`")
+                })?;
+
+            prs.push(PullRequest {
                 number: pr.id,
                 url: pr.links.html.href,
                 title: pr.title,
@@ -347,8 +370,8 @@ impl BitbucketProvider {
                 base: pr.destination.branch.name,
                 existing: true,
                 packages: vec![],
-            })
-            .collect::<Vec<PullRequest>>();
+            });
+        }
 
         trace!("found {} associated pull requests for commit `{commit}`", prs.len());
         Ok(prs)
@@ -516,11 +539,10 @@ impl BitbucketProvider {
         let prs = client
             .get(endpoint.clone())
             .query(&[
-                ("state", "OPEN"),
                 (
                     "q",
                     format!(
-                        "source.repository.full_name = {} AND source.branch.name = {} AND destination.branch.name = {}",
+                        "state = \"OPEN\" AND source.repository.full_name = {} AND source.branch.name = {} AND destination.branch.name = {}",
                         json!(format!("{owner}/{repo}")),
                         json!(head),
                         json!(base),
@@ -1116,6 +1138,14 @@ pub mod tests {
                 .header("content-type", "application/json")
                 .body(include_str!("../../tests/fixtures/bitbucket_cloud_commit_pulls.json"));
         });
+        let pull_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/2.0/repositories/axieum/Hello-World/pullrequests/1347")
+                .header("Accept", "application/json");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!("../../tests/fixtures/bitbucket_cloud_pulls_retrieve.json"));
+        });
 
         // Find associated pull requests for a commit SHA.
         let prs = provider
@@ -1124,15 +1154,16 @@ pub mod tests {
 
         // Ensure the associated pull requests were retrieved successfully.
         commit_pulls_mock.assert_async().await;
+        pull_mock.assert_async().await;
         assert_eq!(
             prs.unwrap(),
             vec![PullRequest {
                 number: 1347,
                 url: "https://bitbucket.org/axieum/Hello-World/pull-requests/1347".to_string(),
-                title: "Amazing new feature".to_string(),
-                body: Some("Please pull these awesome changes in!".to_string()),
-                head: "new-topic".to_string(),
-                base: "master".to_string(),
+                title: "chore: release v1.0.0".to_string(),
+                body: Some("...".to_string()),
+                head: "reflow--branches--main".to_string(),
+                base: "main".to_string(),
                 existing: true,
                 packages: vec![],
             }],
@@ -1245,10 +1276,10 @@ pub mod tests {
             when.method(GET)
                 .path("/2.0/repositories/axieum/Hello-World/pullrequests")
                 .header("Accept", "application/json")
-                .query_param("state", "OPEN")
                 .query_param(
                     "q",
                     concat!(
+                        r#"state = "OPEN" AND "#,
                         r#"source.repository.full_name = "axieum/Hello-World" AND "#,
                         r#"source.branch.name = "reflow--branches--main" AND destination.branch.name = "main""#,
                     ),
@@ -1312,10 +1343,10 @@ pub mod tests {
             when.method(GET)
                 .path("/2.0/repositories/axieum/Hello-World/pullrequests")
                 .header("Accept", "application/json")
-                .query_param("state", "OPEN")
                 .query_param(
                     "q",
                     concat!(
+                        r#"state = "OPEN" AND "#,
                         r#"source.repository.full_name = "axieum/Hello-World" AND "#,
                         r#"source.branch.name = "reflow--branches--main" AND destination.branch.name = "main""#,
                     ),
@@ -1379,10 +1410,10 @@ pub mod tests {
             when.method(GET)
                 .path("/2.0/repositories/axieum/Hello-World/pullrequests")
                 .header("Accept", "application/json")
-                .query_param("state", "OPEN")
                 .query_param(
                     "q",
                     concat!(
+                        r#"state = "OPEN" AND "#,
                         r#"source.repository.full_name = "axieum/Hello-World" AND "#,
                         r#"source.branch.name = "reflow--branches--main" AND destination.branch.name = "main""#,
                     ),
