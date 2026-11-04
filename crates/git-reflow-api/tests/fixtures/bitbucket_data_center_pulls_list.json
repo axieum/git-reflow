@@ -1,0 +1,76 @@
+{
+  "size": 2,
+  "limit": 100,
+  "isLastPage": true,
+  "start": 0,
+  "values": [
+    {
+      "id": 1346,
+      "version": 3,
+      "title": "Another feature",
+      "description": "Unrelated changes",
+      "state": "OPEN",
+      "fromRef": {
+        "id": "refs/heads/another-feature",
+        "displayId": "another-feature",
+        "repository": {
+          "slug": "Hello-World",
+          "project": {
+            "key": "axieum"
+          }
+        }
+      },
+      "toRef": {
+        "id": "refs/heads/main",
+        "displayId": "main",
+        "repository": {
+          "slug": "Hello-World",
+          "project": {
+            "key": "axieum"
+          }
+        }
+      },
+      "links": {
+        "self": [
+          {
+            "href": "https://bb.example.com/projects/axieum/repos/Hello-World/pull-requests/1346"
+          }
+        ]
+      }
+    },
+    {
+      "id": 1347,
+      "version": 7,
+      "title": "Amazing new feature",
+      "description": "Please pull these awesome changes in!",
+      "state": "OPEN",
+      "fromRef": {
+        "id": "refs/heads/reflow--branches--main",
+        "displayId": "reflow--branches--main",
+        "repository": {
+          "slug": "Hello-World",
+          "project": {
+            "key": "axieum"
+          }
+        }
+      },
+      "toRef": {
+        "id": "refs/heads/main",
+        "displayId": "main",
+        "repository": {
+          "slug": "Hello-World",
+          "project": {
+            "key": "axieum"
+          }
+        }
+      },
+      "links": {
+        "self": [
+          {
+            "href": "https://bb.example.com/projects/axieum/repos/Hello-World/pull-requests/1347"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "size": 1,
+  "page": 1,
+  "pagelen": 1,
+  "values": [
+    {
+      "id": 1347,
+      "title": "Amazing new feature",
+      "summary": {
+        "raw": "Please pull these awesome changes in!"
+      },
+      "state": "OPEN",
+      "source": {
+        "branch": {
+          "name": "reflow--branches--main"
+        },
+        "repository": {
+          "full_name": "axieum/Hello-World"
+        }
+      },
+      "destination": {
+        "branch": {
+          "name": "main"
+        },
+        "repository": {
+          "full_name": "axieum/Hello-World"
+        }
+      },
+      "links": {
+        "html": {
+          "href": "https://bitbucket.org/axieum/Hello-World/pull-requests/1347"
+        }
+      }
+    }
+  ]
+}

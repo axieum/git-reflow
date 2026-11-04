@@ -468,14 +468,134 @@ impl BitbucketProvider {
     /// A result containing the pull request number, URL, and whether it was created or updated.
     pub async fn upsert_pull_request_via_cloud(
         &self,
-        _owner: &str,
-        _repo: &str,
-        _head: &str,
-        _base: &str,
-        _title: &str,
-        _body: &str,
+        owner: &str,
+        repo: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
     ) -> anyhow::Result<PullRequest> {
-        todo!();
+        #[derive(serde::Deserialize)]
+        struct Response {
+            values: Vec<CloudPullRequest>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct CloudPullRequest {
+            id: u64,
+            title: String,
+            summary: Summary,
+            links: Links,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Summary {
+            raw: Option<String>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Links {
+            html: Link,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Link {
+            href: String,
+        }
+
+        let client = self.client()?;
+        let endpoint = self.endpoint(&format!("2.0/repositories/{}/{}/pullrequests", owner, repo))?;
+
+        // Find an open pull request with the same head and base branches.
+        trace!("find open pull requests with head: {owner}:{head}; base: {base}");
+        let prs = client
+            .get(endpoint.clone())
+            .query(&[
+                ("state", "OPEN"),
+                (
+                    "q",
+                    format!(
+                        "source.repository.full_name = {} AND source.branch.name = {} AND destination.branch.name = {}",
+                        json!(format!("{owner}/{repo}")),
+                        json!(head),
+                        json!(base),
+                    )
+                    .as_str(),
+                ),
+                ("pagelen", "1"),
+            ])
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .context("could not list pull requests via Bitbucket Cloud")?
+            .json::<Response>()
+            .await
+            .context("could not parse pull requests from Bitbucket Cloud")?;
+
+        // If a pull request already exists, update it.
+        if let Some(pr) = prs.values.into_iter().next() {
+            let updated = if pr.title != title || pr.summary.raw.as_deref() != Some(body) {
+                trace!("updating existing pull request #{}", pr.id);
+                client
+                    .put(self.endpoint(&format!("2.0/repositories/{}/{}/pullrequests/{}", owner, repo, pr.id))?)
+                    .header("Accept", "application/json")
+                    .json(&json!({
+                        "title": title,
+                        "description": body,
+                    }))
+                    .send()
+                    .await
+                    .and_then(reqwest::Response::error_for_status)
+                    .context("failed to update pull request via Bitbucket Cloud")?
+                    .json::<CloudPullRequest>()
+                    .await
+                    .context("could not parse updated pull request from Bitbucket Cloud")?
+            } else {
+                trace!("existing pull request #{} is already up-to-date", pr.id);
+                pr
+            };
+            return Ok(PullRequest {
+                number: updated.id,
+                url: updated.links.html.href,
+                title: updated.title,
+                body: updated.summary.raw,
+                head: head.to_string(),
+                base: base.to_string(),
+                existing: true,
+                packages: vec![],
+            });
+        }
+
+        // A pull request does not exist yet, create one.
+        trace!("creating new pull request: {} -> {}", head, base);
+        let created = client
+            .post(endpoint)
+            .header("Accept", "application/json")
+            .json(&json!({
+                "title": title,
+                "description": body,
+                "source": { "branch": { "name": head } },
+                "destination": { "branch": { "name": base } },
+            }))
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .context("failed to create pull request via Bitbucket Cloud")?
+            .json::<CloudPullRequest>()
+            .await
+            .context("could not parse created pull request from Bitbucket Cloud")?;
+
+        Ok(PullRequest {
+            number: created.id,
+            url: created.links.html.href,
+            title: title.to_string(),
+            body: Some(body.to_string()),
+            head: head.to_string(),
+            base: base.to_string(),
+            existing: false,
+            packages: vec![],
+        })
     }
 
     /// Creates or updates a pull request on Bitbucket Data Center.
@@ -496,14 +616,196 @@ impl BitbucketProvider {
     /// A result containing the pull request number, URL, and whether it was created or updated.
     pub async fn upsert_pull_request_via_data_center(
         &self,
-        _owner: &str,
-        _repo: &str,
-        _head: &str,
-        _base: &str,
-        _title: &str,
-        _body: &str,
+        owner: &str,
+        repo: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
     ) -> anyhow::Result<PullRequest> {
-        todo!();
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Response {
+            values: Vec<DataCenterPullRequest>,
+            is_last_page: bool,
+            next_page_start: Option<u64>,
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct DataCenterPullRequest {
+            id: u64,
+            version: u64,
+            title: String,
+            description: Option<String>,
+            links: Links,
+            from_ref: BranchReference,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct BranchReference {
+            id: String,
+            repository: Repository,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Repository {
+            slug: String,
+            project: Project,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Project {
+            key: String,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Links {
+            #[serde(rename = "self")]
+            self_links: Vec<Link>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Link {
+            href: String,
+        }
+
+        let client = self.client()?;
+        let endpoint = self.endpoint(&format!(
+            "rest/api/latest/projects/{}/repos/{}/pull-requests",
+            owner, repo
+        ))?;
+
+        // Find an open pull request with the same head and base branches.
+        trace!("find open pull requests with head: {owner}:{head}; base: {base}");
+        let head_ref = format!("refs/heads/{head}");
+        let base_ref = format!("refs/heads/{base}");
+        let mut start = 0;
+        let existing = loop {
+            let prs = client
+                .get(endpoint.clone())
+                .query(&[
+                    ("state", "OPEN"),
+                    ("direction", "INCOMING"),
+                    ("at", base_ref.as_str()),
+                    ("limit", "100"),
+                    ("start", start.to_string().as_str()),
+                ])
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+                .context("could not list pull requests via Bitbucket Data Center")?
+                .json::<Response>()
+                .await
+                .context("could not parse pull requests from Bitbucket Data Center")?;
+            if let Some(pr) = prs.values.into_iter().find(|pr| {
+                pr.from_ref.id == head_ref
+                    && pr.from_ref.repository.slug.eq_ignore_ascii_case(repo)
+                    && pr.from_ref.repository.project.key.eq_ignore_ascii_case(owner)
+            }) {
+                break Some(pr);
+            }
+            if prs.is_last_page {
+                break None;
+            }
+            let next_start = prs
+                .next_page_start
+                .context("missing next page start for pull requests from Bitbucket Data Center")?;
+            anyhow::ensure!(
+                next_start > start,
+                "invalid next page start for pull requests from Bitbucket Data Center"
+            );
+            start = next_start;
+        };
+
+        // If a pull request already exists, update it.
+        if let Some(pr) = existing {
+            let updated = if pr.title != title || pr.description.as_deref() != Some(body) {
+                trace!("updating existing pull request #{}", pr.id);
+                client
+                    .put(self.endpoint(&format!(
+                        "rest/api/latest/projects/{}/repos/{}/pull-requests/{}",
+                        owner, repo, pr.id
+                    ))?)
+                    .header("Accept", "application/json")
+                    .json(&json!({
+                        "version": pr.version,
+                        "title": title,
+                        "description": body,
+                    }))
+                    .send()
+                    .await
+                    .and_then(reqwest::Response::error_for_status)
+                    .context("failed to update pull request via Bitbucket Data Center")?
+                    .json::<DataCenterPullRequest>()
+                    .await
+                    .context("could not parse updated pull request from Bitbucket Data Center")?
+            } else {
+                trace!("existing pull request #{} is already up-to-date", pr.id);
+                pr
+            };
+            let url = updated
+                .links
+                .self_links
+                .into_iter()
+                .next()
+                .with_context(|| format!("missing URL for Bitbucket Data Center pull request #{}", updated.id))?
+                .href;
+            return Ok(PullRequest {
+                number: updated.id,
+                url,
+                title: updated.title,
+                body: updated.description,
+                head: head.to_string(),
+                base: base.to_string(),
+                existing: true,
+                packages: vec![],
+            });
+        }
+
+        // A pull request does not exist yet, create one.
+        trace!("creating new pull request: {} -> {}", head, base);
+        let created = client
+            .post(endpoint)
+            .header("Accept", "application/json")
+            .json(&json!({
+                "title": title,
+                "description": body,
+                "fromRef": {
+                    "id": head_ref,
+                    "repository": { "slug": repo, "project": { "key": owner } },
+                },
+                "toRef": {
+                    "id": base_ref,
+                    "repository": { "slug": repo, "project": { "key": owner } },
+                },
+            }))
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .context("failed to create pull request via Bitbucket Data Center")?
+            .json::<DataCenterPullRequest>()
+            .await
+            .context("could not parse created pull request from Bitbucket Data Center")?;
+        let url = created
+            .links
+            .self_links
+            .into_iter()
+            .next()
+            .with_context(|| format!("missing URL for Bitbucket Data Center pull request #{}", created.id))?
+            .href;
+
+        Ok(PullRequest {
+            number: created.id,
+            url,
+            title: title.to_string(),
+            body: Some(body.to_string()),
+            head: head.to_string(),
+            base: base.to_string(),
+            existing: false,
+            packages: vec![],
+        })
     }
 }
 
@@ -909,5 +1211,404 @@ pub mod tests {
         // Ensure the associated pull requests were retrieved successfully.
         commit_pulls_mock.assert_async().await;
         assert!(prs.unwrap().is_empty());
+    }
+
+    /// Tests that a new pull request is created on Bitbucket Cloud when one does not exist yet.
+    #[rstest]
+    #[tokio::test]
+    async fn test_upsert_pull_request_via_cloud_creates_a_new_pr(provider: BitbucketProvider) {
+        // Set up a mock server to simulate the Bitbucket Cloud API.
+        let server = mock_reqwest(&provider).await;
+        let list_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/2.0/repositories/axieum/Hello-World/pullrequests")
+                .header("Accept", "application/json")
+                .query_param("state", "OPEN")
+                .query_param(
+                    "q",
+                    concat!(
+                        r#"source.repository.full_name = "axieum/Hello-World" AND "#,
+                        r#"source.branch.name = "reflow--branches--main" AND destination.branch.name = "main""#,
+                    ),
+                )
+                .query_param("pagelen", "1");
+            then.status(200).json_body(json!({ "values": [] }));
+        });
+        let create_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/2.0/repositories/axieum/Hello-World/pullrequests")
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .json_body(json!({
+                    "title": "chore: release v1.0.0",
+                    "description": "...",
+                    "source": { "branch": { "name": "reflow--branches--main" } },
+                    "destination": { "branch": { "name": "main" } },
+                }));
+            then.status(201)
+                .header("content-type", "application/json")
+                .body(include_str!("../../tests/fixtures/bitbucket_cloud_pulls_retrieve.json"));
+        });
+
+        // Create a new pull request.
+        let pr = provider
+            .upsert_pull_request(
+                "axieum",
+                "Hello-World",
+                "reflow--branches--main",
+                "main",
+                "chore: release v1.0.0",
+                "...",
+            )
+            .await;
+
+        // Ensure the pull request was created successfully.
+        list_mock.assert_async().await;
+        create_mock.assert_async().await;
+        assert_eq!(
+            pr.unwrap(),
+            PullRequest {
+                number: 1347,
+                title: "chore: release v1.0.0".to_string(),
+                body: Some("...".to_string()),
+                url: "https://bitbucket.org/axieum/Hello-World/pull-requests/1347".to_string(),
+                head: "reflow--branches--main".to_string(),
+                base: "main".to_string(),
+                existing: false,
+                packages: vec![],
+            },
+        );
+    }
+
+    /// Tests that an existing pull request is updated on Bitbucket Cloud when one already exists.
+    #[rstest]
+    #[tokio::test]
+    async fn test_upsert_pull_request_via_cloud_updates_an_existing_pr(provider: BitbucketProvider) {
+        // Set up a mock server to simulate the Bitbucket Cloud API.
+        let server = mock_reqwest(&provider).await;
+        let list_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/2.0/repositories/axieum/Hello-World/pullrequests")
+                .header("Accept", "application/json")
+                .query_param("state", "OPEN")
+                .query_param(
+                    "q",
+                    concat!(
+                        r#"source.repository.full_name = "axieum/Hello-World" AND "#,
+                        r#"source.branch.name = "reflow--branches--main" AND destination.branch.name = "main""#,
+                    ),
+                )
+                .query_param("pagelen", "1");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!("../../tests/fixtures/bitbucket_cloud_pulls_list.json"));
+        });
+        let update_mock = server.mock(|when, then| {
+            when.method(PUT)
+                .path("/2.0/repositories/axieum/Hello-World/pullrequests/1347")
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .json_body(json!({
+                    "title": "chore: release v1.0.0",
+                    "description": "...",
+                }));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!("../../tests/fixtures/bitbucket_cloud_pulls_retrieve.json"));
+        });
+
+        // Update an existing pull request.
+        let pr = provider
+            .upsert_pull_request(
+                "axieum",
+                "Hello-World",
+                "reflow--branches--main",
+                "main",
+                "chore: release v1.0.0",
+                "...",
+            )
+            .await;
+
+        // Ensure the existing pull request was updated successfully.
+        list_mock.assert_async().await;
+        update_mock.assert_async().await;
+        assert_eq!(
+            pr.unwrap(),
+            PullRequest {
+                number: 1347,
+                url: "https://bitbucket.org/axieum/Hello-World/pull-requests/1347".to_string(),
+                title: "chore: release v1.0.0".to_string(),
+                body: Some("...".to_string()),
+                head: "reflow--branches--main".to_string(),
+                base: "main".to_string(),
+                existing: true,
+                packages: vec![],
+            },
+        );
+    }
+
+    /// Tests that an existing pull request is not updated on Bitbucket Cloud when it is already up-to-date.
+    #[rstest]
+    #[tokio::test]
+    async fn test_upsert_pull_request_via_cloud_does_not_update_if_already_up_to_date(provider: BitbucketProvider) {
+        // Set up a mock server to simulate the Bitbucket Cloud API.
+        let server = mock_reqwest(&provider).await;
+        let list_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/2.0/repositories/axieum/Hello-World/pullrequests")
+                .header("Accept", "application/json")
+                .query_param("state", "OPEN")
+                .query_param(
+                    "q",
+                    concat!(
+                        r#"source.repository.full_name = "axieum/Hello-World" AND "#,
+                        r#"source.branch.name = "reflow--branches--main" AND destination.branch.name = "main""#,
+                    ),
+                )
+                .query_param("pagelen", "1");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!("../../tests/fixtures/bitbucket_cloud_pulls_list.json"));
+        });
+        let update_mock = server.mock(|when, then| {
+            when.method(PUT)
+                .path("/2.0/repositories/axieum/Hello-World/pullrequests/1347");
+            then.status(200);
+        });
+
+        // Update an existing pull request.
+        let pr = provider
+            .upsert_pull_request(
+                "axieum",
+                "Hello-World",
+                "reflow--branches--main",
+                "main",
+                // NB: This title and body match the existing PR in the fixture.
+                "Amazing new feature",
+                "Please pull these awesome changes in!",
+            )
+            .await;
+
+        // Ensure the existing pull request remains unchanged.
+        // NB: We expect it to fetch the existing pull request, but not update it.
+        list_mock.assert_async().await;
+        update_mock.assert_calls_async(0).await;
+        assert_eq!(
+            pr.unwrap(),
+            PullRequest {
+                number: 1347,
+                url: "https://bitbucket.org/axieum/Hello-World/pull-requests/1347".to_string(),
+                title: "Amazing new feature".to_string(),
+                body: Some("Please pull these awesome changes in!".to_string()),
+                head: "reflow--branches--main".to_string(),
+                base: "main".to_string(),
+                existing: true,
+                packages: vec![],
+            },
+        );
+    }
+
+    /// Tests that a new pull request is created on Bitbucket Data Center when no matching pull request exists.
+    #[rstest]
+    #[tokio::test]
+    async fn test_upsert_pull_request_via_data_center_creates_a_new_pr(
+        #[with("bb.example.com")] provider: BitbucketProvider,
+    ) {
+        // Set up a mock server to simulate the Bitbucket Data Center API.
+        let server = mock_reqwest(&provider).await;
+        let list_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/rest/api/latest/projects/axieum/repos/Hello-World/pull-requests")
+                .header("Accept", "application/json")
+                .query_param("state", "OPEN")
+                .query_param("direction", "INCOMING")
+                .query_param("at", "refs/heads/main")
+                .query_param("limit", "100")
+                .query_param("start", "0");
+            then.status(200).json_body(json!({ "values": [], "isLastPage": true }));
+        });
+        let create_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/rest/api/latest/projects/axieum/repos/Hello-World/pull-requests")
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .json_body(json!({
+                    "title": "chore: release v1.0.0",
+                    "description": "...",
+                    "fromRef": {
+                        "id": "refs/heads/reflow--branches--main",
+                        "repository": { "slug": "Hello-World", "project": { "key": "axieum" } },
+                    },
+                    "toRef": {
+                        "id": "refs/heads/main",
+                        "repository": { "slug": "Hello-World", "project": { "key": "axieum" } },
+                    },
+                }));
+            then.status(201)
+                .header("content-type", "application/json")
+                .body(include_str!(
+                    "../../tests/fixtures/bitbucket_data_center_pulls_retrieve.json"
+                ));
+        });
+
+        // Create a new pull request.
+        let pr = provider
+            .upsert_pull_request(
+                "axieum",
+                "Hello-World",
+                "reflow--branches--main",
+                "main",
+                "chore: release v1.0.0",
+                "...",
+            )
+            .await;
+
+        // Ensure the pull request was created successfully.
+        list_mock.assert_async().await;
+        create_mock.assert_async().await;
+        assert_eq!(
+            pr.unwrap(),
+            PullRequest {
+                number: 1347,
+                url: "https://bb.example.com/projects/axieum/repos/Hello-World/pull-requests/1347".to_string(),
+                title: "chore: release v1.0.0".to_string(),
+                body: Some("...".to_string()),
+                head: "reflow--branches--main".to_string(),
+                base: "main".to_string(),
+                existing: false,
+                packages: vec![],
+            },
+        );
+    }
+
+    /// Tests that an existing pull request is updated on Bitbucket Data Center when one already exists.
+    #[rstest]
+    #[tokio::test]
+    async fn test_upsert_pull_request_via_data_center_updates_an_existing_pr(
+        #[with("bb.example.com")] provider: BitbucketProvider,
+    ) {
+        // Set up a mock server to simulate the Bitbucket Data Center API.
+        let server = mock_reqwest(&provider).await;
+        let list_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/rest/api/latest/projects/axieum/repos/Hello-World/pull-requests")
+                .header("Accept", "application/json")
+                .query_param("state", "OPEN")
+                .query_param("direction", "INCOMING")
+                .query_param("at", "refs/heads/main")
+                .query_param("limit", "100")
+                .query_param("start", "0");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!(
+                    "../../tests/fixtures/bitbucket_data_center_pulls_list.json"
+                ));
+        });
+        let update_mock = server.mock(|when, then| {
+            when.method(PUT)
+                .path("/rest/api/latest/projects/axieum/repos/Hello-World/pull-requests/1347")
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .json_body(json!({
+                    "version": 7,
+                    "title": "chore: release v1.0.0",
+                    "description": "...",
+                }));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!(
+                    "../../tests/fixtures/bitbucket_data_center_pulls_retrieve.json"
+                ));
+        });
+
+        // Update an existing pull request.
+        let pr = provider
+            .upsert_pull_request(
+                "axieum",
+                "Hello-World",
+                "reflow--branches--main",
+                "main",
+                "chore: release v1.0.0",
+                "...",
+            )
+            .await;
+
+        // Ensure the existing pull request was updated successfully.
+        list_mock.assert_async().await;
+        update_mock.assert_async().await;
+        assert_eq!(
+            pr.unwrap(),
+            PullRequest {
+                number: 1347,
+                url: "https://bb.example.com/projects/axieum/repos/Hello-World/pull-requests/1347".to_string(),
+                title: "chore: release v1.0.0".to_string(),
+                body: Some("...".to_string()),
+                head: "reflow--branches--main".to_string(),
+                base: "main".to_string(),
+                existing: true,
+                packages: vec![],
+            },
+        );
+    }
+
+    /// Tests that an existing pull request is not updated on Bitbucket Data Center when it is already up-to-date.
+    #[rstest]
+    #[tokio::test]
+    async fn test_upsert_pull_request_via_data_center_does_not_update_if_already_up_to_date(
+        #[with("bb.example.com")] provider: BitbucketProvider,
+    ) {
+        // Set up a mock server to simulate the Bitbucket Data Center API.
+        let server = mock_reqwest(&provider).await;
+        let list_mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/rest/api/latest/projects/axieum/repos/Hello-World/pull-requests")
+                .header("Accept", "application/json")
+                .query_param("state", "OPEN")
+                .query_param("direction", "INCOMING")
+                .query_param("at", "refs/heads/main")
+                .query_param("limit", "100")
+                .query_param("start", "0");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(include_str!(
+                    "../../tests/fixtures/bitbucket_data_center_pulls_list.json"
+                ));
+        });
+        let update_mock = server.mock(|when, then| {
+            when.method(PUT)
+                .path("/rest/api/latest/projects/axieum/repos/Hello-World/pull-requests/1347");
+            then.status(200);
+        });
+
+        // Update an existing pull request.
+        let pr = provider
+            .upsert_pull_request(
+                "axieum",
+                "Hello-World",
+                "reflow--branches--main",
+                "main",
+                // NB: This title and body match the existing PR in the fixture.
+                "Amazing new feature",
+                "Please pull these awesome changes in!",
+            )
+            .await;
+
+        // Ensure the existing pull request remains unchanged.
+        // NB: We expect it to fetch the existing pull request, but not update it.
+        list_mock.assert_async().await;
+        update_mock.assert_calls_async(0).await;
+        assert_eq!(
+            pr.unwrap(),
+            PullRequest {
+                number: 1347,
+                url: "https://bb.example.com/projects/axieum/repos/Hello-World/pull-requests/1347".to_string(),
+                title: "Amazing new feature".to_string(),
+                body: Some("Please pull these awesome changes in!".to_string()),
+                head: "reflow--branches--main".to_string(),
+                base: "main".to_string(),
+                existing: true,
+                packages: vec![],
+            },
+        );
     }
 }
