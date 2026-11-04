@@ -127,7 +127,7 @@ pub trait BaseGitProvider {
     ///
     /// # Returns
     ///
-    /// A result containing a URL to the release.
+    /// A result containing a URL to the release, if supported.
     #[allow(clippy::too_many_arguments)]
     async fn upsert_release(
         &self,
@@ -138,7 +138,7 @@ pub trait BaseGitProvider {
         title: &str,
         body: &str,
         make_latest: bool,
-    ) -> anyhow::Result<String>;
+    ) -> anyhow::Result<Option<String>>;
 }
 
 #[async_trait]
@@ -181,7 +181,7 @@ impl BaseGitProvider for GitProvider {
         title: &str,
         body: &str,
         make_latest: bool,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<Option<String>> {
         match self {
             GitProvider::Bitbucket(provider) => {
                 provider

@@ -159,8 +159,10 @@ pub async fn create_releases(config: &AppConfig, dry_run: bool) -> anyhow::Resul
                             pkg_config.make_latest,
                         )
                         .await?;
-                    debug!("🚀 created {} release at {url}", config.git.provider);
-                    Some(url)
+                    if let Some(url) = &url {
+                        debug!("🚀 created {} release at {url}", config.git.provider);
+                    }
+                    url
                 } else {
                     debug!("creating {} release: {release_title} (dry run)", config.git.provider);
                     debug!("🚀 created {} release (dry run)", config.git.provider);

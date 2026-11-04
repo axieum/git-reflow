@@ -851,9 +851,9 @@ impl BaseGitProvider for BitbucketProvider {
         _title: &str,
         _body: &str,
         _make_latest: bool,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<Option<String>> {
         trace!("skip release creation via Bitbucket for `{owner}/{repo}` - not supported");
-        todo!();
+        Ok(None)
     }
 }
 
@@ -1610,5 +1610,27 @@ pub mod tests {
                 packages: vec![],
             },
         );
+    }
+
+    /// Tests that release creation is skipped on Bitbucket since it does not support releases.
+    #[rstest]
+    #[tokio::test]
+    async fn test_upsert_release(provider: BitbucketProvider) {
+        // Create a new release.
+        let release = provider
+            .upsert_release(
+                "axieum",
+                "Hello-World",
+                "v1.0.0",
+                "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+                "Release v1.0.0",
+                "...",
+                true,
+            )
+            .await;
+
+        // Ensure the release was skipped successfully (since Bitbucket does not support releases).
+        assert!(release.is_ok());
+        assert!(release.unwrap().is_none());
     }
 }
