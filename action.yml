@@ -38,7 +38,7 @@ runs:
       with:
         tool: |
           git-cliff@2.14
-          git-reflow@0.1
+          git-reflow@0.2
 
     - name: Run git-reflow
       id: reflow
