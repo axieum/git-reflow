@@ -20,7 +20,7 @@ use tracing::trace;
 pub struct GitHubProvider {
     /// The GitHub host, or a full API URL for a custom endpoint.
     ///
-    /// **Default:** `$GITHUB_SERVER_URL` or `github.com`
+    /// **Default:** `$GITHUB_API_URL` or `api.github.com`
     #[serde(default = "default_host")]
     pub host: String,
     /// Whether to commit changes and create release tags via the GitHub API instead of using the local Git client.
@@ -37,13 +37,13 @@ pub struct GitHubProvider {
 
 /// Returns the default value for `$.host`.
 fn default_host() -> String {
-    // If the `GITHUB_SERVER_URL` environment variable is present, use it as the host.
+    // If the `GITHUB_API_URL` environment variable is present, use it as the host.
     // See: https://docs.github.com/en/actions/reference/workflows-and-actions/variables
-    env::var("GITHUB_SERVER_URL")
+    env::var("GITHUB_API_URL")
         .ok()
         .filter(|url| !url.is_empty())
         // Otherwise, use the default GitHub host.
-        .unwrap_or_else(|| String::from("github.com"))
+        .unwrap_or_else(|| String::from("api.github.com"))
 }
 
 /// Returns the default value for `$.commit_via_api`.
@@ -492,16 +492,16 @@ pub mod tests {
         server
     }
 
-    /// Tests that the default GitHub host is detected from the `GITHUB_SERVER_URL` environment variable.
+    /// Tests that the default GitHub host is detected from the `GITHUB_API_URL` environment variable.
     #[rstest]
-    #[case::default(None, "github.com")]
-    #[case::github_server_url(Some("https://gh.example.com"), "https://gh.example.com")]
+    #[case::default(None, "api.github.com")]
+    #[case::github_api_url(Some("https://gh.example.com"), "https://gh.example.com")]
     #[tokio::test]
     async fn test_default_host(#[case] env_var: Option<&str>, #[case] expected: &str) {
         if let Some(url) = env_var {
-            unsafe { std::env::set_var("GITHUB_SERVER_URL", url) }
+            unsafe { std::env::set_var("GITHUB_API_URL", url) }
         } else {
-            unsafe { std::env::remove_var("GITHUB_SERVER_URL") }
+            unsafe { std::env::remove_var("GITHUB_API_URL") }
         }
         assert_eq!(default_host(), expected);
     }

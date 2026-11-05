@@ -6,7 +6,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
   "git": {
     "provider": {
       "github": {
-        "host": "github.com",
+        "host": "api.github.com",
         "commit-via-api": true
       }
     },

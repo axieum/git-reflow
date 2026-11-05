@@ -229,7 +229,7 @@ impl Default for GitProvider {
             #[cfg(feature = "github")]
             ("GITHUB_TOKEN", (|| Self::GitHub(GitHubProvider::default()))),
             #[cfg(feature = "github")]
-            ("GITHUB_SERVER_URL", (|| Self::GitHub(GitHubProvider::default()))),
+            ("GITHUB_API_URL", (|| Self::GitHub(GitHubProvider::default()))),
             #[cfg(feature = "bitbucket")]
             ("BITBUCKET_TOKEN", (|| Self::Bitbucket(BitbucketProvider::default()))),
             #[cfg(feature = "bitbucket")]
@@ -444,12 +444,12 @@ mod tests {
     /// Tests that the default Git provider is selected based on the environment variables present.
     #[rstest]
     #[case::github_token(Some("GITHUB_TOKEN"), GitProvider::GitHub(GitHubProvider::default()))]
-    #[case::github_server_url(Some("GITHUB_SERVER_URL"), GitProvider::GitHub(GitHubProvider::default()))]
+    #[case::github_api_url(Some("GITHUB_API_URL"), GitProvider::GitHub(GitHubProvider::default()))]
     #[case::bitbucket_token(Some("BITBUCKET_TOKEN"), GitProvider::Bitbucket(BitbucketProvider::default()))]
     #[case::bitbucket_url(Some("BITBUCKET_URL"), GitProvider::Bitbucket(BitbucketProvider::default()))]
     #[case::fallthrough(None, GitProvider::GitHub(GitHubProvider::default()))]
     fn test_default(#[case] env_var: Option<&str>, #[case] expected: GitProvider) {
-        unsafe { std::env::remove_var("GITHUB_SERVER_URL") }
+        unsafe { std::env::remove_var("GITHUB_API_URL") }
         unsafe { std::env::remove_var("GITHUB_TOKEN") }
         if let Some(env_var) = env_var {
             unsafe { std::env::set_var(env_var, "truthy") }
