@@ -302,6 +302,7 @@ pub async fn commit_and_push_to_remote(
     // Short-circuit for dry runs, logging the operations that would be performed.
     if dry_run {
         match &config.git.provider {
+            #[cfg(feature = "github")]
             GitProvider::GitHub(provider) if provider.commit_via_api => {
                 debug!("push branch `{}` to remote `{}` (dry run)", branch_name, remote.url);
                 debug!("commit changes to branch `{}` (via GitHub API) (dry run)", branch_name);
@@ -320,6 +321,7 @@ pub async fn commit_and_push_to_remote(
     let tree_id = tree_id.context("a staged tree is required to commit release changes")?;
     let commit_id = match &config.git.provider {
         // GitHub API commits require pushing the branch first, then creating the commit via the API.
+        #[cfg(feature = "github")]
         GitProvider::GitHub(provider) if provider.commit_via_api => {
             debug!("push branch `{}` to remote `{}`", branch_name, remote.url);
             push_branch(repo, branch_name, true)?;

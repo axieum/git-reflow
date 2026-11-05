@@ -1,5 +1,8 @@
 use crate::plan::PackageRelease;
-use crate::provider::{bitbucket::BitbucketProvider, github::GitHubProvider};
+#[cfg(feature = "bitbucket")]
+use crate::provider::bitbucket::BitbucketProvider;
+#[cfg(feature = "github")]
+use crate::provider::github::GitHubProvider;
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use semver::Version;
@@ -8,7 +11,9 @@ use std::fmt::Display;
 use std::str::FromStr;
 use tracing::trace;
 
+#[cfg(feature = "bitbucket")]
 pub mod bitbucket;
+#[cfg(feature = "github")]
 pub mod github;
 
 /// Available Git providers.
@@ -18,8 +23,10 @@ pub mod github;
 #[serde(rename_all = "lowercase")]
 pub enum GitProvider {
     /// The [Bitbucket](https://bitbucket.org/) Git provider.
+    #[cfg(feature = "bitbucket")]
     Bitbucket(BitbucketProvider),
     /// The [GitHub](https://github.com/) Git provider.
+    #[cfg(feature = "github")]
     GitHub(GitHubProvider),
 }
 
@@ -150,7 +157,9 @@ impl BaseGitProvider for GitProvider {
         commit: &str,
     ) -> anyhow::Result<Vec<PullRequest>> {
         match self {
+            #[cfg(feature = "bitbucket")]
             GitProvider::Bitbucket(provider) => provider.associated_pull_requests(owner, repo, commit).await,
+            #[cfg(feature = "github")]
             GitProvider::GitHub(provider) => provider.associated_pull_requests(owner, repo, commit).await,
         }
     }
@@ -165,9 +174,11 @@ impl BaseGitProvider for GitProvider {
         body: &str,
     ) -> anyhow::Result<PullRequest> {
         match self {
+            #[cfg(feature = "bitbucket")]
             GitProvider::Bitbucket(provider) => {
                 provider.upsert_pull_request(owner, repo, head, base, title, body).await
             }
+            #[cfg(feature = "github")]
             GitProvider::GitHub(provider) => provider.upsert_pull_request(owner, repo, head, base, title, body).await,
         }
     }
@@ -183,11 +194,13 @@ impl BaseGitProvider for GitProvider {
         make_latest: bool,
     ) -> anyhow::Result<Option<String>> {
         match self {
+            #[cfg(feature = "bitbucket")]
             GitProvider::Bitbucket(provider) => {
                 provider
                     .upsert_release(owner, repo, tag_name, commit_sha, title, body, make_latest)
                     .await
             }
+            #[cfg(feature = "github")]
             GitProvider::GitHub(provider) => {
                 provider
                     .upsert_release(owner, repo, tag_name, commit_sha, title, body, make_latest)
@@ -200,7 +213,9 @@ impl BaseGitProvider for GitProvider {
 impl Display for GitProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "bitbucket")]
             GitProvider::Bitbucket(_) => write!(f, "bitbucket"),
+            #[cfg(feature = "github")]
             GitProvider::GitHub(_) => write!(f, "github"),
         }
     }
@@ -208,7 +223,11 @@ impl Display for GitProvider {
 
 impl Default for GitProvider {
     fn default() -> Self {
-        GitProvider::GitHub(GitHubProvider::default())
+        cfg_select! {
+            feature = "github" => GitProvider::GitHub(GitHubProvider::default()),
+            feature = "bitbucket" => GitProvider::Bitbucket(BitbucketProvider::default()),
+            _ => compile_error!("at least one Git provider feature must be enabled"),
+        }
     }
 }
 
@@ -217,7 +236,9 @@ impl FromStr for GitProvider {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            #[cfg(feature = "bitbucket")]
             "bitbucket" => Ok(GitProvider::Bitbucket(BitbucketProvider::default())),
+            #[cfg(feature = "github")]
             "github" => Ok(GitProvider::GitHub(GitHubProvider::default())),
             &_ => Err(format!("unknown Git provider `{s}`").to_string()),
         }

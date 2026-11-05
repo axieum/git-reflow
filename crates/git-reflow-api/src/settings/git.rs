@@ -1,5 +1,4 @@
 use crate::provider::GitProvider;
-use crate::provider::github::GitHubProvider;
 
 /// The Git provider configuration.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -58,7 +57,7 @@ fn default_tag_major_and_minor() -> bool {
 impl Default for GitConfig {
     fn default() -> Self {
         Self {
-            provider: GitProvider::GitHub(GitHubProvider::default()),
+            provider: GitProvider::default(),
             release_branch_prefix: default_release_branch_prefix(),
             commit_message_pattern: default_commit_message_pattern(),
             separate_pull_requests: false,
