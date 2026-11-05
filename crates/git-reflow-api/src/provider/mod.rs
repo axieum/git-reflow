@@ -223,6 +223,25 @@ impl Display for GitProvider {
 
 impl Default for GitProvider {
     fn default() -> Self {
+        // If multiple Git provider features are enabled, try to select the first one based on environment variables.
+        #[allow(clippy::type_complexity)]
+        let providers: [(&str, fn() -> Self); _] = [
+            #[cfg(feature = "github")]
+            ("GITHUB_TOKEN", (|| Self::GitHub(GitHubProvider::default()))),
+            #[cfg(feature = "github")]
+            ("GITHUB_SERVER_URL", (|| Self::GitHub(GitHubProvider::default()))),
+            #[cfg(feature = "bitbucket")]
+            ("BITBUCKET_TOKEN", (|| Self::Bitbucket(BitbucketProvider::default()))),
+            #[cfg(feature = "bitbucket")]
+            ("BITBUCKET_URL", (|| Self::Bitbucket(BitbucketProvider::default()))),
+        ];
+        for (env_var, provider) in providers {
+            if std::env::var(env_var).is_ok_and(|val| !val.is_empty()) {
+                return provider();
+            }
+        }
+
+        // If no environment variables matched, choose the first enabled Git provider feature as the default provider.
         cfg_select! {
             feature = "github" => GitProvider::GitHub(GitHubProvider::default()),
             feature = "bitbucket" => GitProvider::Bitbucket(BitbucketProvider::default()),
@@ -421,6 +440,25 @@ mod tests {
     use indoc::indoc;
     use rstest::rstest;
     use std::collections::HashMap;
+
+    /// Tests that the default Git provider is selected based on the environment variables present.
+    #[rstest]
+    #[case::github_token(Some("GITHUB_TOKEN"), GitProvider::GitHub(GitHubProvider::default()))]
+    #[case::github_server_url(Some("GITHUB_SERVER_URL"), GitProvider::GitHub(GitHubProvider::default()))]
+    #[case::bitbucket_token(Some("BITBUCKET_TOKEN"), GitProvider::Bitbucket(BitbucketProvider::default()))]
+    #[case::bitbucket_url(Some("BITBUCKET_URL"), GitProvider::Bitbucket(BitbucketProvider::default()))]
+    #[case::fallthrough(None, GitProvider::GitHub(GitHubProvider::default()))]
+    fn test_default(#[case] env_var: Option<&str>, #[case] expected: GitProvider) {
+        unsafe { std::env::remove_var("GITHUB_SERVER_URL") }
+        unsafe { std::env::remove_var("GITHUB_TOKEN") }
+        if let Some(env_var) = env_var {
+            unsafe { std::env::set_var(env_var, "truthy") }
+        }
+        assert_eq!(
+            std::mem::discriminant(&GitProvider::default()),
+            std::mem::discriminant(&expected),
+        );
+    }
 
     /// Tests that a pull request body can be built from a list of a single package.
     #[test]
