@@ -67,7 +67,7 @@ pub async fn apply_release_plan(
 
         // Prepare the branch name, pull request title & description for the release group.
         let branch_name = build_release_branch_name(config, &releases[0].package_name, &guard.original_branch)?;
-        let pr_title = &releases[0].commit_message;
+        let pr_title = build_pull_request_title(config, releases);
         let pr_body = build_pull_request_body(releases)?;
 
         // Create or reset the target branch for the release group.
@@ -160,7 +160,7 @@ pub async fn apply_release_plan(
             pull_requests.push(PullRequest {
                 number: 0,
                 url: String::new(),
-                title: pr_title.clone(),
+                title: pr_title.to_string(),
                 body: Some(pr_body),
                 head: branch_name,
                 base: guard.original_branch.clone(),
@@ -380,11 +380,38 @@ pub fn build_release_branch_name(config: &AppConfig, package_name: &str, base: &
     })
 }
 
+/// Builds the pull request title for a release group, which may contain one or more package releases.
+///
+/// NB: A combined pull request uses the first configured package's release message, falling back to the first
+/// planned release if that package is not releasing.
+///
+/// # Arguments
+///
+/// * `config` - The app configuration.
+/// * `releases` - The release plan.
+///
+/// # Returns
+///
+/// The commit message to use as the pull request title.
+pub fn build_pull_request_title<'a>(config: &AppConfig, releases: &'a [PackageRelease]) -> &'a str {
+    let title_release = if config.git.separate_pull_requests {
+        &releases[0]
+    } else {
+        config
+            .packages
+            .first()
+            .and_then(|pkg| releases.iter().find(|release| release.package_name == pkg.name()))
+            .unwrap_or(&releases[0])
+    };
+    &title_release.commit_message
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::git::stage_and_commit;
     use crate::provider::{GitProvider, github::GitHubProvider, github::tests::mock_octocrab};
+    use crate::settings::pkg::PackageConfig;
     use assert_fs::{TempDir, prelude::*};
     use git_reflow_fixtures::{add_origin_remote, project_repo};
     use git2::Repository;
@@ -1118,5 +1145,58 @@ mod tests {
         config.git.separate_pull_requests = true;
         let branch_name = build_release_branch_name(&config, "example-package", "main").unwrap();
         assert_eq!(branch_name, "reflow--branches--main--example-package");
+    }
+
+    /// Tests that combined PR titles use the first configured package, falling back to the first release.
+    #[rstest]
+    #[case("example-cli", "chore(example-cli): release v0.3.0")]
+    #[case("example-api", "chore(example-api): release v0.2.0")]
+    #[case("example-rust-workspace", "chore(example-api): release v0.2.0")]
+    fn test_build_pull_request_title(#[case] first_package: &str, #[case] expected_title: &str) {
+        let config = AppConfig {
+            packages: vec![PackageConfig {
+                name: Some(first_package.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let releases = [("example-api", "0.2.0"), ("example-cli", "0.3.0")].map(|(name, version)| PackageRelease {
+            package_name: name.to_string(),
+            current_version: None,
+            next_version: Version::parse(version).unwrap(),
+            commit_message: format!("chore({name}): release v{version}"),
+            changelog_md: String::new(),
+            dependencies: HashMap::new(),
+            context: json!(null),
+        });
+
+        assert_eq!(build_pull_request_title(&config, &releases), expected_title);
+    }
+
+    /// Tests that separate PR titles use the first release rather than the first configured package.
+    #[test]
+    fn test_build_pull_request_title_with_separate_prs() {
+        let mut config = AppConfig {
+            packages: vec![PackageConfig {
+                name: Some("example-cli".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        config.git.separate_pull_requests = true;
+        let releases = [("example-api", "0.2.0"), ("example-cli", "0.3.0")].map(|(name, version)| PackageRelease {
+            package_name: name.to_string(),
+            current_version: None,
+            next_version: Version::parse(version).unwrap(),
+            commit_message: format!("chore({name}): release v{version}"),
+            changelog_md: String::new(),
+            dependencies: HashMap::new(),
+            context: json!(null),
+        });
+
+        assert_eq!(
+            build_pull_request_title(&config, &releases),
+            "chore(example-api): release v0.2.0",
+        );
     }
 }

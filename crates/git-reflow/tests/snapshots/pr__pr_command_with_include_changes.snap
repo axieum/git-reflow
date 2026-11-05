@@ -1,0 +1,27 @@
+---
+source: crates/git-reflow/tests/pr.rs
+expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
+---
+[
+  {
+    "number": 1347,
+    "url": "https://github.com/octocat/Hello-World/pull/1347",
+    "title": "chore: release v1.1.0",
+    "body": "---\npackages:\n- name: example-api\n  version: 1.1.0\n- name: example-cli\n  version: 1.1.0\n---\n\n<details id=\"example-api\">\n<summary>example-api: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function\n- Add and consume a `multiply` function\n</details>\n\n<details id=\"example-cli\">\n<summary>example-cli: v1.1.0</summary>\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function\n- Add and consume a `multiply` function\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0\n</details>\n",
+    "head": "reflow--branches--main",
+    "base": "main",
+    "existing": false,
+    "packages": [
+      {
+        "name": "example-api",
+        "version": "1.1.0",
+        "changelog_md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function\n- Add and consume a `multiply` function"
+      },
+      {
+        "name": "example-cli",
+        "version": "1.1.0",
+        "changelog_md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function\n- Add and consume a `multiply` function\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0"
+      }
+    ]
+  }
+]
