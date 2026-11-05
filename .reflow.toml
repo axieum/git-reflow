@@ -3,12 +3,10 @@
 exclude = ["crates/git-reflow-fixtures"]
 
 [[packages]]
-dir = "."
-name = "git-reflow-workspace" # NB: A Cargo workspace does not have a package name, so specify one here.
-
-[[packages]]
 dir = "crates/git-reflow"
 scope = "cli" # NB: Override the commit scope, e.g. `chore(cli): release v0.1.0`.
+changelog-path = "../../CHANGELOG.md" # NB: Emit the changelog to the root of the repository.
+include-changes = ["crates/git-reflow-api"] # NB: Include changes from the `git-reflow-api` crate in the release notes.
 
 [[packages]]
 dir = "crates/git-reflow-api"

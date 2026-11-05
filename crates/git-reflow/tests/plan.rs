@@ -1,9 +1,11 @@
 use assert_cmd::Command;
 use assert_fs::TempDir;
+use assert_fs::fixture::{FileWriteStr, PathChild};
 use git_reflow_api::git::stage_and_commit;
 use git_reflow_fixtures::{INSTA_STDOUT_FILTERS, project_repo};
 use git2::Repository;
 use rstest::*;
+use serde_json::json;
 use std::fs;
 use std::io::Write;
 
@@ -129,6 +131,82 @@ fn test_plan_command_with_multiple_tags(#[with("example-rust-workspace")] projec
     assert_eq!(plan[2]["package-name"], "example-cli");
     assert_eq!(plan[2]["current-version"], "1.1.0");
     assert_eq!(plan[2]["next-version"], "1.2.0");
+
+    insta::with_settings!({ filters => INSTA_STDOUT_FILTERS }, {
+        insta::assert_snapshot!(String::from_utf8_lossy(&assert.get_output().stdout));
+    });
+}
+
+/// Tests that the `plan` command handles additional included paths, e.g. `include-changes = ["crates/example-api"]`.
+#[rstest]
+fn test_plan_command_with_include_changes(#[with("example-rust-workspace")] project_repo: (TempDir, Repository)) {
+    let (project_dir, repo) = project_repo;
+
+    // Configure `git-reflow` by:
+    // - Having `example-cli` include changes from the `example-api` package;
+    // - Having `example-cli` emit its changelog to the root of the repository.
+    std::fs::remove_file(project_dir.child(".reflow.yaml")).unwrap(); // NB: Remove the config from the fixture.
+    project_dir
+        .child(".reflow.json")
+        .write_str(
+            &json!({
+                "packages": [
+                    {
+                        "dir": "crates/example-cli",
+                        "name": "example-cli",
+                        "scope": "cli",
+                        "changelog-path": "../../CHANGELOG.md",
+                        "include-changes": ["crates/example-api"],
+                        "include-name-in-tag": false, // NB: The first package defaults to false, but still set it.
+                    },
+                    {
+                        "dir": "crates/example-api",
+                        "name": "example-api",
+                        "scope": "api",
+                    },
+                ],
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+    // Commit the current files to the `main` branch.
+    repo.set_head("refs/heads/main").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
+
+    // Create Git tags for the current versions of the packages.
+    let commit = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.tag_lightweight("v1.0.0", commit.as_object(), false).unwrap();
+    repo.tag_lightweight("example-api-v1.0.0", commit.as_object(), false)
+        .unwrap();
+
+    // Create some changes in the packages and commit those changes.
+    let lib_rs_path = project_dir.path().join("crates/example-api/src/lib.rs");
+    writeln!(
+        fs::OpenOptions::new().append(true).open(&lib_rs_path).unwrap(),
+        "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
+    )
+    .unwrap();
+    stage_and_commit(&repo, &["."], "feat(api): add a `subtract` function").unwrap();
+
+    // Create a change that affects both packages and commit that change.
+    // NB: We expect the commit to be included *once* in each package's changelog.
+    writeln!(
+        fs::OpenOptions::new().append(true).open(&lib_rs_path).unwrap(),
+        "\npub fn multiply(a: i32, b: i32) -> i32 {{ a * b }}"
+    )
+    .unwrap();
+    let main_rs_path = project_dir.path().join("crates/example-cli/src/main.rs");
+    writeln!(
+        fs::OpenOptions::new().append(true).open(&main_rs_path).unwrap(),
+        "\npub fn multiply(a: i32, b: i32) -> i32 {{ example_api::multiply(5, 9) }}"
+    )
+    .unwrap();
+    stage_and_commit(&repo, &["."], "feat: add and consume a `multiply` function").unwrap();
+
+    // Run the `plan` command.
+    let mut cmd = Command::cargo_bin("git-reflow").unwrap();
+    let assert = cmd.current_dir(&project_dir).arg("plan").assert().success();
 
     insta::with_settings!({ filters => INSTA_STDOUT_FILTERS }, {
         insta::assert_snapshot!(String::from_utf8_lossy(&assert.get_output().stdout));

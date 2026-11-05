@@ -1,0 +1,24 @@
+---
+source: crates/git-reflow/tests/plan.rs
+expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
+---
+[
+  {
+    "package-name": "example-api",
+    "current-version": "1.0.0",
+    "next-version": "1.1.0",
+    "commit-message": "chore(api): release v1.1.0",
+    "changelog-md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function\n- Add and consume a `multiply` function",
+    "dependencies": {}
+  },
+  {
+    "package-name": "example-cli",
+    "current-version": "1.0.0",
+    "next-version": "1.1.0",
+    "commit-message": "chore(cli): release v1.1.0",
+    "changelog-md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function\n- Add and consume a `multiply` function\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0",
+    "dependencies": {
+      "example-api": "1.1.0"
+    }
+  }
+]
