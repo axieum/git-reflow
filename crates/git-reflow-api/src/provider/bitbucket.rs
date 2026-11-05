@@ -12,7 +12,7 @@ use tracing::trace;
 pub struct BitbucketProvider {
     /// The Bitbucket host, or a full API URL for a custom endpoint.
     ///
-    /// **Default:** api.bitbucket.org
+    /// **Default:** `$BITBUCKET_URL` or `api.bitbucket.org`
     #[serde(default = "default_host")]
     pub host: String,
     /// Whether to create release tags via the Bitbucket API instead of using the local Git client.
@@ -32,7 +32,13 @@ pub struct BitbucketProvider {
 
 /// Returns the default value for `$.host`.
 fn default_host() -> String {
-    String::from("api.bitbucket.org")
+    // If the `BITBUCKET_URL` environment variable is present, use it as the host.
+    // See: https://support.atlassian.com/bitbucket-cloud/docs/variables-and-secrets
+    env::var("BITBUCKET_URL")
+        .ok()
+        .filter(|url| !url.is_empty())
+        // Otherwise, use the default Bitbucket Cloud host.
+        .unwrap_or_else(|| String::from("api.bitbucket.org"))
 }
 
 /// Returns the default value for `$.tag_via_api`.
@@ -905,6 +911,20 @@ pub mod tests {
         provider.client.set(reqwest::Client::new()).unwrap();
         provider.base_url.set(server.base_url().parse().unwrap()).unwrap();
         server
+    }
+
+    /// Tests that the default Bitbucket host is detected from the `BITBUCKET_URL` environment variable.
+    #[rstest]
+    #[case::default(None, "api.bitbucket.org")]
+    #[case::bitbucket_url(Some("https://bb.example.com"), "https://bb.example.com")]
+    #[tokio::test]
+    async fn test_default_host(#[case] env_var: Option<&str>, #[case] expected: &str) {
+        if let Some(url) = env_var {
+            unsafe { std::env::set_var("BITBUCKET_URL", url) }
+        } else {
+            unsafe { std::env::remove_var("BITBUCKET_URL") }
+        }
+        assert_eq!(default_host(), expected);
     }
 
     /// Tests that a [`reqwest`] client is built _once_ from the `BITBUCKET_TOKEN` environment variable.

@@ -20,7 +20,7 @@ use tracing::trace;
 pub struct GitHubProvider {
     /// The GitHub host, or a full API URL for a custom endpoint.
     ///
-    /// **Default:** github.com
+    /// **Default:** `$GITHUB_SERVER_URL` or `github.com`
     #[serde(default = "default_host")]
     pub host: String,
     /// Whether to commit changes and create release tags via the GitHub API instead of using the local Git client.
@@ -37,7 +37,13 @@ pub struct GitHubProvider {
 
 /// Returns the default value for `$.host`.
 fn default_host() -> String {
-    String::from("github.com")
+    // If the `GITHUB_SERVER_URL` environment variable is present, use it as the host.
+    // See: https://docs.github.com/en/actions/reference/workflows-and-actions/variables
+    env::var("GITHUB_SERVER_URL")
+        .ok()
+        .filter(|url| !url.is_empty())
+        // Otherwise, use the default GitHub host.
+        .unwrap_or_else(|| String::from("github.com"))
 }
 
 /// Returns the default value for `$.commit_via_api`.
@@ -69,17 +75,14 @@ impl GitHubProvider {
 
         // Prepare the Octocrab client with the GitHub token from the environment variable.
         let token = env::var("GITHUB_TOKEN").context("`GITHUB_TOKEN` environment variable is not set")?;
-        let mut builder = Octocrab::builder().personal_token(token);
-
-        // For GitHub Enterprise, set the base URI to the API endpoint.
-        if self.host != "github.com" {
-            let base_uri = if self.host.contains("://") {
+        let builder = Octocrab::builder()
+            .personal_token(token)
+            .base_uri(if self.host.contains("://") {
                 self.host.clone()
             } else {
-                format!("https://{}/api/v3", self.host)
-            };
-            builder = builder.base_uri(base_uri)?;
-        }
+                format!("https://{}/", self.host)
+            })
+            .context("invalid GitHub URL")?;
 
         // Build the Octocrab client once and return it.
         let client = builder.build().context("failed to build octocrab client")?;
@@ -487,6 +490,20 @@ pub mod tests {
             )
             .unwrap();
         server
+    }
+
+    /// Tests that the default GitHub host is detected from the `GITHUB_SERVER_URL` environment variable.
+    #[rstest]
+    #[case::default(None, "github.com")]
+    #[case::github_server_url(Some("https://gh.example.com"), "https://gh.example.com")]
+    #[tokio::test]
+    async fn test_default_host(#[case] env_var: Option<&str>, #[case] expected: &str) {
+        if let Some(url) = env_var {
+            unsafe { std::env::set_var("GITHUB_SERVER_URL", url) }
+        } else {
+            unsafe { std::env::remove_var("GITHUB_SERVER_URL") }
+        }
+        assert_eq!(default_host(), expected);
     }
 
     /// Tests that an [`Octocrab`] client is built _once_ from the `GITHUB_TOKEN` environment variable.
