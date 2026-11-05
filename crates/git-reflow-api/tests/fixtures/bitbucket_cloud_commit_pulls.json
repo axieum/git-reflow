@@ -1,0 +1,23 @@
+{
+  "repo_indexed": true,
+  "type": "paginated_pullrequests",
+  "values": [
+    {
+      "type": "pullrequest",
+      "id": 1347,
+      "title": "Amazing new feature",
+      "draft": false,
+      "links": {
+        "self": {
+          "href": "https://bitbucket.org/!api/2.0/repositories/axieum/Hello-World/pullrequests/1347"
+        },
+        "html": {
+          "href": "https://bitbucket.org/axieum/Hello-World/pull-requests/1347"
+        }
+      },
+      "queued": false
+    }
+  ],
+  "page": 1,
+  "pagelen": 50
+}

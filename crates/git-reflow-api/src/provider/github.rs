@@ -421,7 +421,7 @@ impl BaseGitProvider for GitHubProvider {
         title: &str,
         body: &str,
         make_latest: bool,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<Option<String>> {
         let client = self.client()?;
         let repos = client.repos(owner, repo);
         let releases = repos.releases();
@@ -433,7 +433,7 @@ impl BaseGitProvider for GitHubProvider {
                 "release with tag name `{}` already exists: {}",
                 tag_name, release.html_url,
             );
-            return Ok(release.html_url.to_string());
+            return Ok(Some(release.html_url.to_string()));
         }
 
         // A release does not exist yet, create one.
@@ -452,7 +452,7 @@ impl BaseGitProvider for GitHubProvider {
             .await
             .context("failed to create release")?;
 
-        Ok(created.html_url.to_string())
+        Ok(Some(created.html_url.to_string()))
     }
 }
 
@@ -774,7 +774,7 @@ pub mod tests {
         create_mock.assert_async().await;
         assert_eq!(
             release.unwrap(),
-            "https://github.com/octocat/Hello-World/releases/v1.0.0"
+            Some("https://github.com/octocat/Hello-World/releases/v1.0.0".to_string()),
         );
     }
 
@@ -815,7 +815,7 @@ pub mod tests {
         create_mock.assert_calls_async(0).await;
         assert_eq!(
             release.unwrap(),
-            "https://github.com/octocat/Hello-World/releases/v1.0.0"
+            Some("https://github.com/octocat/Hello-World/releases/v1.0.0".to_string()),
         );
     }
 

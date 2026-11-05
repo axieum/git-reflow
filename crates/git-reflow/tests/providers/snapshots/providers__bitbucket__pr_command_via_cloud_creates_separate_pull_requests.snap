@@ -1,0 +1,54 @@
+---
+source: crates/git-reflow/tests/providers/bitbucket.rs
+expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
+---
+[
+  {
+    "number": 1347,
+    "url": "https://bitbucket.org/axieum/Hello-World/pull-requests/1347",
+    "title": "chore: release v1.1.0",
+    "body": "---\npackages:\n- name: example-rust-workspace\n  version: 1.1.0\n---\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function\n",
+    "head": "reflow--branches--main--example-rust-workspace",
+    "base": "main",
+    "existing": false,
+    "packages": [
+      {
+        "name": "example-rust-workspace",
+        "version": "1.1.0",
+        "changelog_md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function"
+      }
+    ]
+  },
+  {
+    "number": 1347,
+    "url": "https://bitbucket.org/axieum/Hello-World/pull-requests/1347",
+    "title": "chore(example-api): release v1.1.0",
+    "body": "---\npackages:\n- name: example-api\n  version: 1.1.0\n---\n\n## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function\n",
+    "head": "reflow--branches--main--example-api",
+    "base": "main",
+    "existing": false,
+    "packages": [
+      {
+        "name": "example-api",
+        "version": "1.1.0",
+        "changelog_md": "## [1.1.0] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function"
+      }
+    ]
+  },
+  {
+    "number": 1347,
+    "url": "https://bitbucket.org/axieum/Hello-World/pull-requests/1347",
+    "title": "chore(example-cli): release v1.0.1",
+    "body": "---\npackages:\n- name: example-cli\n  version: 1.0.1\n---\n\n## [1.0.1] - [DATE]\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0\n",
+    "head": "reflow--branches--main--example-cli",
+    "base": "main",
+    "existing": false,
+    "packages": [
+      {
+        "name": "example-cli",
+        "version": "1.0.1",
+        "changelog_md": "## [1.0.1] - [DATE]\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v1.1.0"
+      }
+    ]
+  }
+]

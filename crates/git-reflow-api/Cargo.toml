@@ -16,6 +16,7 @@ glob = "0.3.4"
 handlebars = "6.4.4"
 octocrab = "0.54.7"
 regex = "1.13.1"
+reqwest = { version = "0.13.5", features = ["json", "query"] }
 semver = { version = "1.0.28", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

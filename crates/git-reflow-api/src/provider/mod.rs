@@ -1,5 +1,5 @@
 use crate::plan::PackageRelease;
-use crate::provider::github::GitHubProvider;
+use crate::provider::{bitbucket::BitbucketProvider, github::GitHubProvider};
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use semver::Version;
@@ -8,6 +8,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 use tracing::trace;
 
+pub mod bitbucket;
 pub mod github;
 
 /// Available Git providers.
@@ -16,6 +17,8 @@ pub mod github;
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GitProvider {
+    /// The [Bitbucket](https://bitbucket.org/) Git provider.
+    Bitbucket(BitbucketProvider),
     /// The [GitHub](https://github.com/) Git provider.
     GitHub(GitHubProvider),
 }
@@ -124,7 +127,7 @@ pub trait BaseGitProvider {
     ///
     /// # Returns
     ///
-    /// A result containing a URL to the release.
+    /// A result containing a URL to the release, if supported.
     #[allow(clippy::too_many_arguments)]
     async fn upsert_release(
         &self,
@@ -135,7 +138,7 @@ pub trait BaseGitProvider {
         title: &str,
         body: &str,
         make_latest: bool,
-    ) -> anyhow::Result<String>;
+    ) -> anyhow::Result<Option<String>>;
 }
 
 #[async_trait]
@@ -147,6 +150,7 @@ impl BaseGitProvider for GitProvider {
         commit: &str,
     ) -> anyhow::Result<Vec<PullRequest>> {
         match self {
+            GitProvider::Bitbucket(provider) => provider.associated_pull_requests(owner, repo, commit).await,
             GitProvider::GitHub(provider) => provider.associated_pull_requests(owner, repo, commit).await,
         }
     }
@@ -161,6 +165,9 @@ impl BaseGitProvider for GitProvider {
         body: &str,
     ) -> anyhow::Result<PullRequest> {
         match self {
+            GitProvider::Bitbucket(provider) => {
+                provider.upsert_pull_request(owner, repo, head, base, title, body).await
+            }
             GitProvider::GitHub(provider) => provider.upsert_pull_request(owner, repo, head, base, title, body).await,
         }
     }
@@ -174,8 +181,13 @@ impl BaseGitProvider for GitProvider {
         title: &str,
         body: &str,
         make_latest: bool,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<Option<String>> {
         match self {
+            GitProvider::Bitbucket(provider) => {
+                provider
+                    .upsert_release(owner, repo, tag_name, commit_sha, title, body, make_latest)
+                    .await
+            }
             GitProvider::GitHub(provider) => {
                 provider
                     .upsert_release(owner, repo, tag_name, commit_sha, title, body, make_latest)
@@ -188,6 +200,7 @@ impl BaseGitProvider for GitProvider {
 impl Display for GitProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            GitProvider::Bitbucket(_) => write!(f, "bitbucket"),
             GitProvider::GitHub(_) => write!(f, "github"),
         }
     }
@@ -204,6 +217,7 @@ impl FromStr for GitProvider {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "bitbucket" => Ok(GitProvider::Bitbucket(BitbucketProvider::default())),
             "github" => Ok(GitProvider::GitHub(GitHubProvider::default())),
             &_ => Err(format!("unknown Git provider `{s}`").to_string()),
         }

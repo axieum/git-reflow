@@ -1,0 +1,28 @@
+{
+  "size": 1,
+  "limit": 25,
+  "isLastPage": true,
+  "start": 0,
+  "values": [
+    {
+      "id": 1347,
+      "title": "Amazing new feature",
+      "description": "Please pull these awesome changes in!",
+      "fromRef": {
+        "id": "refs/heads/new-topic",
+        "displayId": "new-topic"
+      },
+      "toRef": {
+        "id": "refs/heads/master",
+        "displayId": "master"
+      },
+      "links": {
+        "self": [
+          {
+            "href": "https://bb.example.com/projects/axieum/repos/Hello-World/pull-requests/1347"
+          }
+        ]
+      }
+    }
+  ]
+}
