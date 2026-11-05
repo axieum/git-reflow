@@ -218,6 +218,7 @@ mod tests {
     use assert_fs::fixture::PathChild;
     use git_reflow_fixtures::project_repo;
     use git2::Repository;
+    use rstest::rstest;
     use std::path::Path;
 
     /// Tests that workspace discovery adds workspace members and applies their defaults.
@@ -286,7 +287,7 @@ mod tests {
     }
 
     /// Tests that discovered packages are excluded when they match the `$.exclude` globs setting.
-    #[rstest::rstest]
+    #[rstest]
     #[case::one_member("crates/example-api", vec!["example-cli"])]
     #[case::all_members("crates/*", vec![])]
     #[case::no_members("crates/missing", vec!["example-api", "example-cli"])]
@@ -321,7 +322,7 @@ mod tests {
     }
 
     /// Tests that only the first package defaults to unprefixed Git tags without overriding explicit settings.
-    #[rstest::rstest]
+    #[rstest]
     fn test_load_when_packages_include_name_in_tag(#[values(None, Some(true), Some(false))] explicit: Option<bool>) {
         // Prepare two package configurations.
         let mut package = serde_json::json!({ "name": "first", "strategy": "basic" });
@@ -343,7 +344,7 @@ mod tests {
     }
 
     /// Tests that only the first package defaults to make latest without overriding explicit settings.
-    #[rstest::rstest]
+    #[rstest]
     fn test_load_when_packages_make_latest(
         #[values(None, Some(true), Some(false))] explicit: Option<bool>,
         #[values(None, Some(true), Some(false))] second_explicit: Option<bool>,
