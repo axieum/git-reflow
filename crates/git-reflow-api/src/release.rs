@@ -219,9 +219,11 @@ pub async fn tag_and_push_to_remote(
     // Short-circuit for dry runs, logging the operations that would be performed.
     if dry_run {
         match &config.git.provider {
+            #[cfg(feature = "bitbucket")]
             GitProvider::Bitbucket(provider) if provider.tag_via_api => {
                 debug!("🏷️ create tag `{tag_name}` (via Bitbucket API) (dry run)");
             }
+            #[cfg(feature = "github")]
             GitProvider::GitHub(provider) if provider.commit_via_api => {
                 debug!("🏷️ create tag `{tag_name}` (via GitHub API) (dry run)");
             }
@@ -236,6 +238,7 @@ pub async fn tag_and_push_to_remote(
     // Create and push the release tag to the remote repository.
     match &config.git.provider {
         // Bitbucket API tags are created directly on the remote repository.
+        #[cfg(feature = "bitbucket")]
         GitProvider::Bitbucket(provider) if provider.tag_via_api => {
             debug!("🏷️ create tag `{tag_name}` (via Bitbucket API)");
             provider
@@ -243,6 +246,7 @@ pub async fn tag_and_push_to_remote(
                 .await?;
         }
         // GitHub API tags are created directly on the remote repository.
+        #[cfg(feature = "github")]
         GitProvider::GitHub(provider) if provider.commit_via_api => {
             debug!("🏷️ create tag `{tag_name}` (via GitHub API)");
             provider
@@ -312,8 +316,8 @@ mod tests {
     use super::*;
     use crate::git::stage_and_commit;
     use crate::provider::{
-        GitProvider, PullRequestPackage, bitbucket::BitbucketProvider, bitbucket::tests::mock_reqwest,
-        build_pull_request_body, github::GitHubProvider, github::tests::mock_octocrab,
+        PullRequestPackage, bitbucket::BitbucketProvider, bitbucket::tests::mock_reqwest, build_pull_request_body,
+        github::GitHubProvider, github::tests::mock_octocrab,
     };
     use crate::settings::pkg::PackageConfig;
     use assert_fs::{TempDir, prelude::*};

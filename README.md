@@ -27,6 +27,13 @@
 cargo install git-reflow --locked
 ```
 
+### Feature Flags
+
+- `bitbucket` - Bitbucket provider support
+- `github` - GitHub provider support
+
+**Default features:** `github`, `bitbucket`.
+
 ## Usage
 
 ```bash
