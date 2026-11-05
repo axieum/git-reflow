@@ -1,3 +1,19 @@
+## [0.2.0] - 2026-11-05
+
+### 🚀 Features
+
+- Add Bitbucket support (#4)
+- Detect the Git provider from environment variables (#6)
+- Allow including additional paths for a package (#7)
+
+### 🐛 Bug Fixes
+
+- *(api)* Ensure at most one package has `include-name-in-tag` set to `false`
+- *(api)* Normalise changelog paths and prevent escaping the repo root (#8)
+- *(api)* Use the first configured package's commit message as pr title (#9)
+- *(api)* Default GitHub host to `api.github.com`
+- *(deps)* Update dependency `git-reflow-api` to v0.2.0
+
 ## [0.1.1] - 2026-11-02
 
 ### 🐛 Bug Fixes
