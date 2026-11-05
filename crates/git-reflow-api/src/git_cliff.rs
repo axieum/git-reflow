@@ -50,6 +50,7 @@ impl CommandRunner for GitCliffRunner {
 ///
 /// * `dir` - The path to scope the commits to.
 /// * `tag_prefix` - The package's release tag prefix, e.g. `v` or `my-package-v`.
+/// * `include_paths` - A list of additional glob patterns to include, e.g. `["crates/git-reflow-api"]`.
 /// * `extra_commits` - A list of synthetic commit messages, such as dependency updates, if any.
 /// * `runner` - The `git-cliff` command runner.
 ///
@@ -59,6 +60,7 @@ impl CommandRunner for GitCliffRunner {
 pub fn run_git_cliff(
     dir: &Path,
     tag_prefix: &str,
+    include_paths: &[String],
     extra_commits: &[String],
     runner: Option<&dyn CommandRunner>,
 ) -> anyhow::Result<Option<Value>> {
@@ -68,16 +70,23 @@ pub fn run_git_cliff(
         _ => dir.join("**").join("*"),
     };
     let include_path = include_path.to_string_lossy();
+    let include_paths = include_paths
+        .iter()
+        .map(|path| {
+            if !path.ends_with('*') {
+                format!("{path}/**")
+            } else {
+                path.clone()
+            }
+        })
+        .collect::<Vec<_>>();
     let tag_pattern = format!(r"^{}.*$", regex::escape(tag_prefix));
-    let mut args = vec![
-        "--include-path",
-        &include_path,
-        "--tag-pattern",
-        &tag_pattern,
-        "--unreleased",
-        "--bump",
-        "--context",
-    ];
+
+    let mut args = vec!["--include-path", &include_path];
+    for path in &include_paths {
+        args.extend(["--include-path", path.as_str()]);
+    }
+    args.extend(["--tag-pattern", &tag_pattern, "--unreleased", "--bump", "--context"]);
     for message in extra_commits {
         args.extend(["--with-commit", message]);
     }
@@ -293,7 +302,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], &[], Some(&runner));
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.0.0"}));
@@ -330,13 +339,56 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, tag_prefix, &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, tag_prefix, &[], &[], Some(&runner));
 
         assert!(result.is_ok());
         assert_eq!(
             result.unwrap().unwrap(),
             serde_json::json!({"version": "1.1.0", "previous": {"version": "1.0.0"}}),
         );
+    }
+
+    /// Tests that additional include paths are included when running `git-cliff`.
+    #[test]
+    fn test_run_git_cliff_with_include_paths() {
+        // Prepare the primary include path.
+        let include_dir = Path::new("crates").join("pkg-a");
+        let include_glob = include_dir.join("**").join("*");
+        let additional_paths = vec!["crates/pkg-b".to_string(), "crates/pkg-c/*".to_string()];
+
+        // Expect a separate argument pair for each additional include path.
+        let mut runner = MockGitCliffRunner::new();
+        runner
+            .expect_run()
+            .withf(move |args, _| {
+                args == [
+                    "--include-path",
+                    &include_glob.to_string_lossy(),
+                    "--include-path",
+                    "crates/pkg-b/**",
+                    "--include-path",
+                    "crates/pkg-c/*", // NB: We expect this glob to be passed as-is, without appending `/**`.
+                    "--tag-pattern",
+                    TAG_PATTERN,
+                    "--unreleased",
+                    "--bump",
+                    "--context",
+                ]
+            })
+            .returning(move |_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0), // success
+                    stdout: r#"[{"version": "1.2.3"}]"#.as_bytes().to_vec(),
+                    stderr: vec![],
+                })
+            });
+
+        // Run `git-cliff` with the primary and additional include paths.
+        let result = run_git_cliff(&include_dir, "v", &additional_paths, &[], Some(&runner));
+
+        // Verify that the command was successful and the returned context contains the expected version.
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.2.3"}));
     }
 
     /// Tests that each synthetic commit message is passed to `git-cliff` and returned in its context.
@@ -379,7 +431,7 @@ pub(crate) mod tests {
             });
 
         // Run `git-cliff` with all synthetic commits.
-        let result = run_git_cliff(&include_dir, "v", &extra_commits, Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], &extra_commits, Some(&runner));
 
         // Verify that the returned context retains every synthetic commit exactly once.
         assert!(result.is_ok());
@@ -422,7 +474,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], &[], Some(&runner));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -456,7 +508,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], &[], Some(&runner));
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "git-cliff error: something went wrong");
@@ -490,7 +542,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], &[], Some(&runner));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -524,7 +576,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], &[], Some(&runner));
 
         assert!(result.is_err());
         assert_eq!(
@@ -561,7 +613,7 @@ pub(crate) mod tests {
                 })
             });
 
-        let result = run_git_cliff(&include_dir, "v", &[], Some(&runner));
+        let result = run_git_cliff(&include_dir, "v", &[], &[], Some(&runner));
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), serde_json::json!({"version": "1.0.0"}));

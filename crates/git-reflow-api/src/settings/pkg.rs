@@ -41,6 +41,13 @@ pub struct PackageConfig {
     /// **Default:** `CHANGELOG.md`
     #[serde(default = "default_changelog_path")]
     pub changelog_path: Option<String>,
+    /// A list of additional glob patterns to include in the release changes, e.g. `["crates/git-reflow-api"]`.
+    ///
+    /// NB: This affects the semantic version bump as well as the release notes.
+    ///
+    /// **Default:** `[]`
+    #[serde(default)]
+    pub include_changes: Vec<String>,
     /// If `true`, only create a git tag for this package without creating a release.
     ///
     /// **Default:** `false`
@@ -74,6 +81,8 @@ impl Default for PackageConfig {
             include_name_in_tag: true,
             // The default changelog path is `CHANGELOG.md` relative to the package directory.
             changelog_path: Some(String::from("CHANGELOG.md")),
+            // By default, no additional paths are included in the release changes.
+            include_changes: vec![],
             // By default, create both a git tag and a release for this package.
             tag_only: false,
             // By default, do not mark this release as the latest on the Git provider.

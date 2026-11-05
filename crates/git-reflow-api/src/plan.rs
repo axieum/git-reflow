@@ -77,7 +77,7 @@ pub async fn plan_releases(
 
         // Run `git-cliff` in the package directory.
         let tag_prefix = build_git_tag_name(pkg, &pkg_name, "")?;
-        let context = match run_git_cliff(&pkg.dir, &tag_prefix, &extra_commits, None)? {
+        let context = match run_git_cliff(&pkg.dir, &tag_prefix, &pkg.include_changes, &extra_commits, None)? {
             // If the context contains a bump type, it indicates that there are changes to be released.
             // If the context does not contain a previous version, it also indicates that this is the first release.
             Some(ctx) if !ctx["bump_type"].is_null() || ctx["previous"].is_null() => {
