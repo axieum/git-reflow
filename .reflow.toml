@@ -4,7 +4,7 @@ exclude = ["crates/git-reflow-fixtures"]
 
 [[packages]]
 dir = "crates/git-reflow"
-scope = "cli" # NB: Override the commit scope, e.g. `chore(cli): release v0.1.0`.
+scope = "" # NB: Clear the commit scope for this non-root package, e.g. `chore: release v0.1.0`.
 changelog-path = "../../CHANGELOG.md" # NB: Emit the changelog to the root of the repository.
 include-changes = ["crates/git-reflow-api"] # NB: Include changes from the `git-reflow-api` crate in the release notes.
 
