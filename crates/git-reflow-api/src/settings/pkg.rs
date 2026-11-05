@@ -1,7 +1,7 @@
 use crate::detect::detect_strategy;
 use crate::strategy::{BaseStrategy, Strategy};
-use anyhow::Context;
-use std::path::{Path, PathBuf};
+use anyhow::{Context, bail, ensure};
+use std::path::{Component, Path, PathBuf};
 use tracing::trace;
 
 /// The individual package configuration.
@@ -112,8 +112,42 @@ impl PackageConfig {
     }
 
     /// Returns the effective path to the package's changelog file relative to the root.
-    pub fn changelog_path(&self) -> Option<PathBuf> {
-        self.changelog_path.as_ref().map(|c| self.dir.join(c))
+    ///
+    /// # Returns
+    ///
+    /// A result containing the normalised path to the changelog file, or `None` if the changelog is disabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns and error if the path is absolute or traverses above the root.
+    pub fn changelog_path(&self) -> anyhow::Result<Option<PathBuf>> {
+        self.changelog_path
+            .as_ref()
+            .map(|c| {
+                let path = self.dir.join(c);
+                let mut normalized = PathBuf::new();
+                for component in path.components() {
+                    match component {
+                        Component::CurDir => {}
+                        Component::Normal(part) => normalized.push(part),
+                        Component::ParentDir => {
+                            ensure!(
+                                normalized.pop(),
+                                "changelog path `{}` escapes the repository root",
+                                path.display(),
+                            );
+                        }
+                        Component::Prefix(_) | Component::RootDir => {
+                            bail!(
+                                "changelog path `{}` must be relative to the repository root",
+                                path.display(),
+                            );
+                        }
+                    }
+                }
+                Ok(normalized)
+            })
+            .transpose()
     }
 
     /// Applies default values to missing configuration options.
@@ -178,6 +212,7 @@ where
 mod tests {
     use super::*;
     use crate::strategy::basic::BasicStrategy;
+    use rstest::rstest;
 
     /// Tests that an empty package config deserialises to defaults.
     #[test]
@@ -190,7 +225,7 @@ mod tests {
         assert_eq!(config.strategy, None);
         assert!(config.workspace);
         assert!(config.include_name_in_tag);
-        assert_eq!(config.changelog_path(), Some(PathBuf::from(".").join("CHANGELOG.md")));
+        assert_eq!(config.changelog_path().unwrap(), Some(PathBuf::from("CHANGELOG.md")));
         assert!(!config.tag_only);
         assert!(!config.make_latest);
     }
@@ -231,14 +266,14 @@ mod tests {
         assert!(!config.workspace);
         assert!(!config.include_name_in_tag);
         assert_eq!(
-            config.changelog_path(),
+            config.changelog_path().unwrap(),
             Some(PathBuf::from("packages/api").join("docs/changes.md"))
         );
     }
 
     /// Tests that a changelog path of [`None`] is deserialized correctly and disables the effective changelog path.
     #[test]
-    fn changelog_path_is_none_when_explicitly_null() {
+    fn test_changelog_path_is_none_when_explicitly_null() {
         let config: PackageConfig = serde_json::from_str(
             r#"{
                 "dir": "packages/api",
@@ -252,12 +287,12 @@ mod tests {
         .unwrap();
         let config = config.apply_defaults().unwrap();
 
-        assert_eq!(config.changelog_path(), None);
+        assert_eq!(config.changelog_path().unwrap(), None);
     }
 
     /// Tests that an empty changelog path is deserialized correctly and disables the effective changelog path.
     #[test]
-    fn changelog_path_is_none_when_explicitly_blank() {
+    fn test_changelog_path_is_none_when_explicitly_blank() {
         let config: PackageConfig = serde_json::from_str(
             r#"{
                 "dir": "packages/api",
@@ -271,7 +306,61 @@ mod tests {
         .unwrap();
         let config = config.apply_defaults().unwrap();
 
-        assert_eq!(config.changelog_path(), None);
+        assert_eq!(config.changelog_path().unwrap(), None);
+    }
+
+    /// Tests that changelog paths remove redundant current and parent directory components.
+    #[rstest]
+    #[case::root_changelog("crates/api", "../../CHANGELOG.md", "CHANGELOG.md")]
+    #[case::sibling_package("./crates/./api", "../cli/./CHANGELOG.md", "crates/cli/CHANGELOG.md")]
+    #[case::parent_directory("crates/api", "docs/../CHANGELOG.md", "crates/api/CHANGELOG.md")]
+    fn test_changelog_path_normalizes_relative_components(
+        #[case] dir: &str,
+        #[case] changelog: &str,
+        #[case] expected: &str,
+    ) {
+        let config = PackageConfig {
+            dir: PathBuf::from(dir),
+            changelog_path: Some(String::from(changelog)),
+            ..Default::default()
+        };
+
+        assert_eq!(config.changelog_path().unwrap(), Some(PathBuf::from(expected)));
+    }
+
+    /// Tests that changelog paths cannot traverse above the repository root.
+    #[rstest]
+    #[case::root_package(".", "../CHANGELOG.md")]
+    #[case::nested_package("crates/example-api", "../../../CHANGELOG.md")]
+    #[case::reentry_after_escape("crates/example-api", "../../../repo/CHANGELOG.md")]
+    fn test_changelog_path_rejects_parent_traversal_above_root(#[case] dir: &str, #[case] changelog: &str) {
+        let config = PackageConfig {
+            dir: PathBuf::from(dir),
+            changelog_path: Some(String::from(changelog)),
+            ..Default::default()
+        };
+
+        let error = config.changelog_path().unwrap_err();
+        assert!(error.to_string().contains("escapes the repository root"));
+    }
+
+    /// Tests that absolute changelog paths are rejected instead of replacing the package directory.
+    #[test]
+    fn test_changelog_path_rejects_absolute_paths() {
+        let config = PackageConfig {
+            changelog_path: Some(
+                std::env::current_dir()
+                    .unwrap()
+                    .join("CHANGELOG.md")
+                    .to_str()
+                    .unwrap()
+                    .to_owned(),
+            ),
+            ..Default::default()
+        };
+
+        let error = config.changelog_path().unwrap_err();
+        assert!(error.to_string().contains("must be relative to the repository root"));
     }
 
     /// Tests that the conventional commit scope defaults to the package name for non-root packages.

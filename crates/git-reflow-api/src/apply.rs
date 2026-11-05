@@ -224,7 +224,7 @@ pub async fn write_package_release(
     changed_files.extend(manifest_paths);
 
     // Write the changelog Markdown to the changelog file, if it is configured.
-    if let Some(changelog_path) = package.changelog_path() {
+    if let Some(changelog_path) = package.changelog_path()? {
         if !dry_run {
             debug!("write changelog to `{}`", changelog_path.display());
             write_changelog_markdown(&changelog_path, &release.changelog_md)?;
