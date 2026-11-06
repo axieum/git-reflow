@@ -1,8 +1,8 @@
 <div align="center">
 
-# git-reflow
+![](./.github/banner.png "git-reflow")
 
-`git-reflow` is a tool for automating semantic releases by raising pull-requests when commits enter release branches.
+_A tool for automating semantic releases by raising pull-requests when commits enter release branches_
 
 </div>
 
