@@ -7,6 +7,9 @@ dir = "crates/git-reflow"
 scope = "" # NB: Clear the commit scope for this non-root package, e.g. `chore: release v0.1.0`.
 changelog-path = "../../CHANGELOG.md" # NB: Emit the changelog to the root of the repository.
 include-changes = ["crates/git-reflow-api"] # NB: Include changes from the `git-reflow-api` crate in the release notes.
+update-files = [
+    { path = "../../action.yml", field = "inputs.version.default", value = "{{ version }}" }, # NB: Update the root `action.yml` file with the new version.
+]
 
 [[packages]]
 dir = "crates/git-reflow-api"

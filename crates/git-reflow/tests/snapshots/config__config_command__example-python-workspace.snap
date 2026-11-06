@@ -28,6 +28,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       "include-name-in-tag": false,
       "changelog-path": "CHANGELOG.md",
       "include-changes": [],
+      "update-files": [],
       "tag-only": false,
       "make-latest": true
     },
@@ -42,6 +43,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       "include-name-in-tag": true,
       "changelog-path": "CHANGELOG.md",
       "include-changes": [],
+      "update-files": [],
       "tag-only": false,
       "make-latest": false
     },
@@ -56,6 +58,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       "include-name-in-tag": true,
       "changelog-path": "CHANGELOG.md",
       "include-changes": [],
+      "update-files": [],
       "tag-only": false,
       "make-latest": false
     }

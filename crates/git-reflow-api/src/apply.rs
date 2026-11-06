@@ -1,3 +1,4 @@
+use crate::files::update_file;
 use crate::git::{
     BranchGuard, RemoteRef, commit, create_or_reset_branch, ensure_clean_working_directory, fetch_branch,
     get_origin_remote, push_branch, sanitize_branch_name, stage, trees_match,
@@ -232,6 +233,13 @@ pub async fn write_package_release(
             debug!("write changelog to `{}` (dry run)", changelog_path.display());
         }
         changed_files.insert(changelog_path);
+    }
+
+    // Write any additional files configured to be updated.
+    for file_to_update in package.update_files.iter() {
+        if let Some(changed_path) = update_file(file_to_update, release, package, dry_run)? {
+            changed_files.insert(changed_path);
+        }
     }
 
     Ok(changed_files)

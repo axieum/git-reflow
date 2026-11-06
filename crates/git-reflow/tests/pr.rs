@@ -110,7 +110,6 @@ fn test_pr_command_with_include_changes(#[with("example-rust-workspace")] projec
         .current_dir(&project_dir)
         .env("GITHUB_TOKEN", "test-token")
         .arg("pr")
-        .arg("-v")
         .assert();
 
     // Verify that a pull request was created for the package.
@@ -132,6 +131,120 @@ fn test_pr_command_with_include_changes(#[with("example-rust-workspace")] projec
     insta::with_settings!({ filters => INSTA_STDOUT_FILTERS }, {
         insta::assert_snapshot!(String::from_utf8_lossy(&assert.get_output().stdout));
         insta::assert_snapshot!("pr_command_with_include_changes_diff", commit_patch(&remote_repo, &release_commit));
+    });
+}
+
+/// Tests that the `pr` command updates additional JSON, YAML, TOML, and Markdown files.
+#[rstest]
+fn test_pr_command_with_update_files(#[with("example-rust")] project_repo: (TempDir, Repository)) {
+    // Create a Git repository and add an `origin` remote.
+    let (project_dir, repo) = project_repo;
+    let (_remote_dir, remote_repo) = add_origin_remote(&repo, "origin", "octocat", "Hello-World");
+
+    // Set up a mock server to simulate the GitHub API.
+    let server = MockServer::start();
+    let list_mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octocat/Hello-World/pulls")
+            .query_param("head", "octocat:reflow--branches--main")
+            .query_param("base", "main");
+        then.status(200).header("content-type", "application/json").body("[]");
+    });
+    let create_mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/repos/octocat/Hello-World/pulls")
+            .json_body_includes(&json!({ "title": "chore: release v1.1.0" }).to_string());
+        then.status(201)
+            .header("content-type", "application/json")
+            .body(include_str!(
+                "../../git-reflow-api/tests/fixtures/github_pulls_retrieve.json"
+            ));
+    });
+
+    // Configure `git-reflow` by:
+    // - Setting the GitHub host to the mock server's base URL;
+    // - Disabling commits via the GitHub API;
+    // - Updating version fields in JSON, YAML, and TOML files, and a marked version in Markdown.
+    project_dir
+        .child(".reflow.json")
+        .write_str(
+            &json!({
+                "git": { "provider": { "github": { "host": server.base_url(), "commit-via-api": false } } },
+                "packages": [
+                    {
+                        "dir": ".",
+                        "update-files": [
+                            { "path": "version.json", "field": "$.version", "value": "{{ version }}" },
+                            { "path": "version.yaml", "field": "version", "value": "{{ version }}" },
+                            { "path": "version.toml", "field": "version", "value": "{{ version }}" },
+                            { "path": "README.md" },
+                        ],
+                    },
+                ],
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+    // Create the additional files with the current version of the package.
+    project_dir
+        .child("version.json")
+        .write_str("{\n  \"version\": \"1.0.0\"\n}\n")
+        .unwrap();
+    project_dir.child("version.yaml").write_str("version: 1.0.0\n").unwrap();
+    project_dir
+        .child("version.toml")
+        .write_str("version = \"1.0.0\"\n")
+        .unwrap();
+    project_dir
+        .child("README.md")
+        .write_str("# example-rust\n\nVersion: v1.0.0 <!-- x-git-reflow-version -->\n")
+        .unwrap();
+
+    // Commit the current files to the `main` branch.
+    repo.set_head("refs/heads/main").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
+
+    // Create a Git tag for the current version of the package.
+    let commit = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.tag_lightweight("v1.0.0", commit.as_object(), false).unwrap();
+
+    // Create some changes in the package and commit those changes.
+    let main_rs_path = project_dir.path().join("src").join("main.rs");
+    writeln!(
+        fs::OpenOptions::new().append(true).open(&main_rs_path).unwrap(),
+        "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
+    )
+    .unwrap();
+    stage_and_commit(&repo, &["."], "feat: add a `subtract` function").unwrap();
+    let head = repo.head().unwrap().target().unwrap();
+
+    // Run the `pr` command for the changed package.
+    let assert = Command::cargo_bin("git-reflow")
+        .unwrap()
+        .current_dir(&project_dir)
+        .env("GITHUB_TOKEN", "test-token")
+        .arg("pr")
+        .assert();
+
+    // Verify that a pull request was created for the package.
+    list_mock.assert_calls(1);
+    create_mock.assert_calls(1);
+    let assert = assert.success();
+
+    // Verify the Git repository state remains unchanged, and that the release branch was pushed up.
+    assert_eq!(repo.head().unwrap().target().unwrap(), head);
+    assert!(repo.statuses(None).unwrap().is_empty(), "uncommitted changes");
+    let release_commit = remote_repo
+        .find_reference("refs/heads/reflow--branches--main")
+        .unwrap()
+        .peel_to_commit()
+        .unwrap();
+
+    // Verify the output of the command as expected.
+    insta::with_settings!({ filters => INSTA_STDOUT_FILTERS }, {
+        insta::assert_snapshot!(String::from_utf8_lossy(&assert.get_output().stdout));
+        insta::assert_snapshot!("pr_command_with_update_files_diff", commit_patch(&remote_repo, &release_commit));
     });
 }
 

@@ -1,5 +1,6 @@
 pub mod apply;
 pub mod detect;
+pub mod files;
 pub mod git;
 pub mod git_cliff;
 pub mod plan;
