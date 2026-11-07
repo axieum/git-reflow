@@ -16,6 +16,7 @@ pr='{}'
 releases='[]'
 release='{}'
 for command in "${commands[@]}"; do
+  echo "$ git-reflow ${args[*]} $command"
   result=$(git-reflow "${args[@]}" "$command")
   result=$(printf '%s\n' "$result" | jq -ce \
     'if type == "array" then . else error("expected a JSON array") end')

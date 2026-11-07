@@ -91,4 +91,5 @@ jobs:
           set -euo pipefail
           packages=$(jq -er '.[] | "--package", .["package-name"]' <<< "$RELEASES")
           mapfile -t args <<< "$packages"
-          cargo publish --locked --dry-run "${args[@]}"
+          echo "$ cargo publish --locked ${args[*]}"
+          cargo publish --locked "${args[@]}"
