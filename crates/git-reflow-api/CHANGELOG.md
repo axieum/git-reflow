@@ -4,6 +4,12 @@
 
 - Add `update-files` option to packages to allow editing arbitrary files (#12)
 
+## [0.3.0] - 2026-11-07
+
+### 🚀 Features
+
+- Add `update-files` option to packages to allow editing arbitrary files (#12)
+
 ## [0.2.0] - 2026-11-05
 
 ### 🚀 Features
