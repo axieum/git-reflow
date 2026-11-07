@@ -1,4 +1,5 @@
 use crate::detect::detect_strategy;
+use crate::files::UpdateFile;
 use crate::strategy::{BaseStrategy, Strategy};
 use anyhow::{Context, bail, ensure};
 use std::path::{Component, Path, PathBuf};
@@ -48,6 +49,11 @@ pub struct PackageConfig {
     /// **Default:** `[]`
     #[serde(default)]
     pub include_changes: Vec<String>,
+    /// A list of additional files to update.
+    ///
+    /// **Default:** `[]`
+    #[serde(default)]
+    pub update_files: Vec<UpdateFile>,
     /// If `true`, only create a git tag for this package without creating a release.
     ///
     /// **Default:** `false`
@@ -83,6 +89,8 @@ impl Default for PackageConfig {
             changelog_path: Some(String::from("CHANGELOG.md")),
             // By default, no additional paths are included in the release changes.
             include_changes: vec![],
+            // By default, no additional files are updated.
+            update_files: vec![],
             // By default, create both a git tag and a release for this package.
             tag_only: false,
             // By default, do not mark this release as the latest on the Git provider.

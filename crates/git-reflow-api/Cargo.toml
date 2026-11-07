@@ -19,19 +19,22 @@ config = { version = "0.15.27", features = ["json", "json5", "toml", "yaml"] }
 git2 = "0.21.0"
 glob = "0.3.4"
 handlebars = "6.4.4"
+jsonc-parser = { version = "0.34.0", features = ["serde_json"] }
 octocrab = { version = "0.54.7", optional = true }
 regex = "1.13.1"
 reqwest = { version = "0.13.5", features = ["json", "query"], optional = true }
 semver = { version = "1.0.28", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+serde_json_path = "0.7.2"
 serde_yaml = "0.9.34"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
-toml = "1.1.8"
-toml_edit = "0.25.17"
+toml = "1.2.1"
+toml_edit = "0.25.19"
 tracing = "0.1.44"
 url = "2.5.8"
+yaml-edit = "0.3.6"
 
 [dev-dependencies]
 git-reflow-fixtures = { path = "../git-reflow-fixtures" }

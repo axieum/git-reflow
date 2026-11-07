@@ -1,0 +1,69 @@
+---
+source: crates/git-reflow/tests/pr.rs
+expression: "commit_patch(&remote_repo, &release_commit)"
+---
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index [COMMIT SHA]..[COMMIT SHA]
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,5 @@
++## [1.1.0] - [DATE]
++
++### 🚀 Features
++
++- Add a `subtract` function
+diff --git a/Cargo.lock b/Cargo.lock
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -4,4 +4,4 @@ version = 4
+ 
+ [[package]]
+ name = "example-rust"
+-version = "1.0.0"
++version = "1.1.0"
+diff --git a/Cargo.toml b/Cargo.toml
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "example-rust"
+-version = "1.0.0"
++version = "1.1.0"
+ description = "An example project."
+ edition = "2024"
+ license = "MIT"
+diff --git a/README.md b/README.md
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,3 @@
+ # example-rust
+ 
+-Version: v1.0.0 <!-- x-git-reflow-version -->
++Version: v1.1.0 <!-- x-git-reflow-version -->
+diff --git a/version.json b/version.json
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/version.json
++++ b/version.json
+@@ -1,3 +1,3 @@
+ {
+-  "version": "1.0.0"
++  "version": "1.1.0"
+ }
+diff --git a/version.toml b/version.toml
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/version.toml
++++ b/version.toml
+@@ -1 +1 @@
+-version = "1.0.0"
++version = "1.1.0"
+diff --git a/version.yaml b/version.yaml
+index [COMMIT SHA]..[COMMIT SHA] 100644
+--- a/version.yaml
++++ b/version.yaml
+@@ -1 +1 @@
+-version: 1.0.0
++version: 1.1.0
