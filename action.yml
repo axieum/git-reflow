@@ -18,7 +18,7 @@ inputs:
   version:
     description: "The version of git-reflow to use."
     required: false
-    default: 0.3.0
+    default: 0.3.1
 
 outputs:
   prs:

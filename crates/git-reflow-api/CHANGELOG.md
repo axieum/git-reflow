@@ -1,3 +1,9 @@
+## [0.3.1] - 2026-11-07
+
+### 🐛 Bug Fixes
+
+- *(api)* Fetch tags created via API into the local repository
+
 ## [0.3.0] - 2026-11-07
 
 ### 🚀 Features
