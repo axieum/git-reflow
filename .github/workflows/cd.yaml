@@ -36,11 +36,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: ⬇️ Install tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: |
+            git-cliff@2.14
+
+      - name: 🏗️ Install git-reflow
+        run: cargo build --locked --release
+
       - name: 🙌 Prepare release
         id: git-reflow
-        uses: axieum/git-reflow@v0
+        shell: bash
         env:
+          PATH: ${{ github.workspace }}/target/release:${{ env.PATH }}
+          COMMAND: ""
+          CONFIG: ""
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/action.sh
 
     outputs:
       prs: ${{ steps.git-reflow.outputs.prs }}
