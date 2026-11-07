@@ -1,3 +1,4 @@
+use crate::git::fetch_tag;
 use crate::git::{RemoteRef, get_origin_remote, push_tag, tag, tag_exists_on_remote};
 use crate::provider::{BaseGitProvider, GitProvider, parse_pull_request_body};
 use crate::settings::{AppConfig, pkg::PackageConfig};
@@ -237,21 +238,25 @@ pub async fn tag_and_push_to_remote(
 
     // Create and push the release tag to the remote repository.
     match &config.git.provider {
-        // Bitbucket API tags are created directly on the remote repository.
+        // Bitbucket API tags are created directly on the remote repository and then fetched.
         #[cfg(feature = "bitbucket")]
         GitProvider::Bitbucket(provider) if provider.tag_via_api => {
             debug!("🏷️ create tag `{tag_name}` (via Bitbucket API)");
             provider
                 .tag(&remote.owner, &remote.repo, tag_name, &commit_id.to_string())
                 .await?;
+            debug!("fetch tag `{tag_name}` from origin remote");
+            fetch_tag(repo, "origin", tag_name)?;
         }
-        // GitHub API tags are created directly on the remote repository.
+        // GitHub API tags are created directly on the remote repository and then fetched.
         #[cfg(feature = "github")]
         GitProvider::GitHub(provider) if provider.commit_via_api => {
             debug!("🏷️ create tag `{tag_name}` (via GitHub API)");
             provider
                 .tag(&remote.owner, &remote.repo, tag_name, &commit_id.to_string())
                 .await?;
+            debug!("fetch tag `{tag_name}` from origin remote");
+            fetch_tag(repo, "origin", tag_name)?;
         }
         // Otherwise, create the tag locally, then push it to the remote.
         _ => {
@@ -1033,7 +1038,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Verify that GitHub created the tag and its reference without changing the local repository.
+        // Verify that GitHub created the tag and its reference.
         tag_mock.assert_async().await;
         ref_mock.assert_async().await;
         assert_eq!(repo.head().unwrap().target(), Some(head));
@@ -1085,7 +1090,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Verify that Bitbucket created the tag without changing the local repository.
+        // Verify that Bitbucket created the tag.
         get_tag_mock.assert_async().await;
         create_tag_mock.assert_async().await;
         assert_eq!(repo.head().unwrap().target(), Some(head));

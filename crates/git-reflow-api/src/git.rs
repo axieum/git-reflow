@@ -453,6 +453,32 @@ pub fn fetch_branch(repo: &Repository, remote_name: &str, branch_name: &str) -> 
     }
 }
 
+/// Fetches the specified tag from the named remote.
+///
+/// NB: This function spawns the `git` CLI as a child process to ensure that
+///     the fetch respects the user's Git configuration, e.g. authentication.
+///
+/// # Arguments
+///
+/// * `repo` - The Git repository to fetch the tag into.
+/// * `remote_name` - The name of the remote to fetch from, e.g. `origin`.
+/// * `tag_name` - The name of the tag to fetch.
+///
+/// # Returns
+///
+/// A result containing the remote tag reference if it exists, e.g. `refs/tags/v1.0.0`.
+pub fn fetch_tag(repo: &Repository, remote_name: &str, tag_name: &str) -> anyhow::Result<Option<String>> {
+    match fetch(
+        repo,
+        remote_name,
+        &format!("+refs/tags/{tag_name}:refs/tags/{tag_name}"),
+    ) {
+        Ok(_) => Ok(Some(format!("refs/tags/{tag_name}"))),
+        Err(e) if e.to_string().contains("couldn't find remote ref") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Pushes the specified reference to the named remote.
 ///
 /// NB: This function spawns the `git` CLI as a child process to ensure that
@@ -1207,6 +1233,46 @@ mod tests {
 
         // Fetch the branch from the remote.
         let remote_ref = fetch_branch(&repo, "origin", "feature").unwrap();
+        assert!(remote_ref.is_none());
+    }
+
+    /// Tests that a tag is fetched from the origin remote.
+    #[test]
+    fn test_fetch_tag() {
+        // Create a local and remote Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+        let (_remote_temp_dir, remote_repo) = create_test_repo();
+        repo.remote("origin", remote_repo.path().to_str().unwrap()).unwrap();
+
+        // Create a tag on the remote.
+        let base = remote_repo.head().unwrap().target().unwrap();
+        tag(&remote_repo, "v1.2.3", base, false).unwrap();
+
+        // Fetch the tag from the remote.
+        let remote_ref = fetch_tag(&repo, "origin", "v1.2.3").unwrap();
+        assert_eq!(remote_ref.unwrap(), "refs/tags/v1.2.3");
+
+        // Verify that the local repository has the remote tag reference.
+        assert_eq!(
+            repo.find_reference("refs/tags/v1.2.3")
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id(),
+            base,
+        );
+    }
+
+    /// Tests that a tag that does not exist on the origin remote is handled correctly.
+    #[test]
+    fn test_fetch_tag_when_it_does_not_exist() {
+        // Create a local and remote Git repository.
+        let (_temp_dir, repo) = create_test_repo();
+        let (_remote_temp_dir, remote_repo) = create_test_repo();
+        repo.remote("origin", remote_repo.path().to_str().unwrap()).unwrap();
+
+        // Fetch the tag from the remote.
+        let remote_ref = fetch_tag(&repo, "origin", "v1.2.3").unwrap();
         assert!(remote_ref.is_none());
     }
 
