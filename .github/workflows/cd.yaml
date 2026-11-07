@@ -57,11 +57,22 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: .github/scripts/action.sh
 
+      - name: 🔎 Did binary release?
+        id: binary-release
+        shell: bash
+        env:
+          RELEASES: ${{ steps.git-reflow.outputs.releases }}
+        run: |
+          set -euo pipefail
+          tag=$(jq -r '.[] | select(.["package-name"] == "git-reflow") | .["tag-name"]' <<< "$RELEASES")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
     outputs:
       prs: ${{ steps.git-reflow.outputs.prs }}
       pr: ${{ steps.git-reflow.outputs.pr }}
       releases: ${{ steps.git-reflow.outputs.releases }}
       release: ${{ steps.git-reflow.outputs.release }}
+      binary-tag: ${{ steps.binary-release.outputs.tag }}
 
   publish:
     name: Publish
@@ -93,3 +104,38 @@ jobs:
           mapfile -t args <<< "$packages"
           echo "$ cargo publish --locked ${args[*]}"
           cargo publish --locked "${args[@]}"
+
+  upload-assets:
+    name: Upload assets
+
+    strategy:
+      matrix:
+        include:
+          - { target: "x86_64-unknown-linux-gnu", os: "ubuntu-latest" }
+          - { target: "x86_64-apple-darwin", os: "macos-latest" }
+          - { target: "x86_64-pc-windows-msvc", os: "windows-latest" }
+
+    needs: [release, publish]
+    runs-on: ${{ matrix.os }}
+    if: ${{ needs.release.outputs.binary-tag != '' }}
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: ✨ Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.binary-tag }}
+          fetch-depth: 0
+
+      - name: ⬆️ Upload binaries
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          package: git-reflow
+          bin: git-reflow
+          ref: refs/tags/${{ needs.release.outputs.binary-tag }}
+          target: ${{ matrix.target }}
+          archive: $bin-$tag-$target
+          locked: true
+          token: ${{ secrets.GITHUB_TOKEN }}
