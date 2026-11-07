@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 args=(--verbose)
 if [[ -n "$CONFIG" ]]; then
   args+=(--config "$CONFIG")
