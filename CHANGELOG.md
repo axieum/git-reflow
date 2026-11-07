@@ -1,3 +1,10 @@
+## [0.3.1] - 2026-11-07
+
+### 🐛 Bug Fixes
+
+- *(api)* Fetch tags created via API into the local repository
+- *(deps)* Update dependency `git-reflow-api` to v0.3.1
+
 ## [0.3.0] - 2026-11-07
 
 ### 🚀 Features
