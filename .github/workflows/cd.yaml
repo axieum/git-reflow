@@ -43,13 +43,15 @@ jobs:
             git-cliff@2.14
 
       - name: 🏗️ Install git-reflow
-        run: cargo build --locked --release
+        shell: bash
+        run: |
+          cargo build --locked --release
+          echo "$GITHUB_WORKSPACE/target/release" >> "$GITHUB_PATH"
 
       - name: 🙌 Prepare release
         id: git-reflow
         shell: bash
         env:
-          PATH: ${{ github.workspace }}/target/release:${{ env.PATH }}
           COMMAND: ""
           CONFIG: ""
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -66,7 +68,7 @@ jobs:
 
     needs: release
     runs-on: ubuntu-latest
-    if: ${{ needs.release.outputs.releases != '[]' }}
+    if: ${{ needs.release.result == 'success' && needs.release.outputs.releases != '[]' }}
 
     concurrency:
       group: git-reflow-${{ github.ref }}

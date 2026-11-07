@@ -1,3 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 args=(--verbose)
 if [[ -n "$CONFIG" ]]; then
   args+=(--config "$CONFIG")
