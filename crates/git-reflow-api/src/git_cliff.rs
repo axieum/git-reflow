@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::str;
 use std::str::FromStr;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 /// Trait to abstract `git-cliff` command execution.
 pub trait CommandRunner {
@@ -43,6 +43,8 @@ impl CommandRunner for GitCliffRunner {
 
 /// Spawns a [`git-cliff`](https://github.com/orhun/git-cliff) process in a given directory and
 /// returns the context as a parsed JSON object.
+///
+/// A valid `Release-As: <version>` commit footer will override the `git-cliff` bumped version.
 ///
 /// > `git-cliff --include-path ${dir}/**/* --tag-pattern ${tag_prefix}.* --unreleased --bump --context`
 ///
@@ -102,6 +104,35 @@ pub fn run_git_cliff(
         match serde_json::from_str::<Value>(json_str) {
             Ok(mut context) => {
                 if let Some(object) = context.as_array_mut().and_then(|a| a.first_mut()) {
+                    // Look for any commits that have a `Release-As: <version>` footer and override the `$.version`.
+                    // NB: Check the `git-cliff` context for `$.commits[*].footers[token="Release-As"].value`.
+                    if let Some(version) = object
+                        .get("commits")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|commit| {
+                            commit.get("footers")?.as_array()?.iter().find_map(|footer| {
+                                if footer.get("token")?.as_str()?.eq_ignore_ascii_case("Release-As") {
+                                    let value = footer.get("value")?.as_str()?;
+                                    match Version::parse(value) {
+                                        Ok(version) => return Some(version),
+                                        Err(err) => {
+                                            warn!("invalid semver version in `Release-As: {value}` footer: {err}");
+                                            return None;
+                                        }
+                                    }
+                                }
+                                None
+                            })
+                        })
+                        // NB: If multiple `Release-As` footers exist, the last one takes precedence.
+                        .next_back()
+                    {
+                        debug!("├ Found `Release-As: {version}` footer, overriding `$.version`");
+                        object["version"] = Value::String(version.to_string());
+                    }
+
                     // Strip tag prefixes retained by `git-cliff`, e.g. `my-package-v1.2.3` becomes `1.2.3`.
                     for path in ["/version", "/previous/version"] {
                         if let Some(value) = object.pointer_mut(path)
@@ -115,6 +146,7 @@ pub fn run_git_cliff(
                             *value = Value::String(stripped_version);
                         }
                     }
+
                     // Trace the parsed context and return.
                     trace!("↳ {}", serde_json::to_string_pretty(object)?);
                     return Ok(Some(object.clone()));
@@ -258,6 +290,7 @@ pub(crate) mod tests {
     use indoc::indoc;
     use mockall::mock;
     use rstest::rstest;
+    use serde_json::json;
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
     #[cfg(windows)]
@@ -444,6 +477,48 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             extra_commits
         );
+    }
+
+    /// Tests that `Release-As: <version`> commit footers override the `git-cliff` version.
+    #[rstest]
+    #[case::valid(json!([{"footers": [{"token": "Release-As", "value": "2.1.3"}]}]), "2.1.3")]
+    #[case::invalid(json!([{"footers": [{"token": "Release-As", "value": "invalid"}]}]), "1.1.0")]
+    #[case::unrelated(json!([{"footers": [{"token": "Reviewed-by", "value": "2.1.3"}]}]), "1.1.0")]
+    #[case::missing(json!([{}, {"footers": null}, {"footers": [{"token": "Release-As"}]}]), "1.1.0")]
+    #[case::case_insensitive(json!([
+        {"footers": [{"token": "release-as", "value": "2.1.3-rc.1+build.2"}]}
+    ]), "2.1.3-rc.1+build.2")]
+    #[case::precedence(json!([
+        {"footers": [{"token": "Release-As", "value": "2.1.3"}]},
+        {"footers": [
+            {"token": "Release-As", "value": "invalid"},
+            {"token": "Release-As", "value": "3.2.1"},
+            {"token": "Release-As", "value": "4.0.0"}
+        ]},
+        {"footers": [{"token": "Release-As", "value": "invalid"}]}
+    ]), "3.2.1")]
+    fn test_run_git_cliff_with_release_as_commit_footer(#[case] commits: Value, #[case] expected: &str) {
+        let context = serde_json::json!([{
+            "version": "example-api-v1.1.0",
+            "previous": {"version": "example-api-v1.0.0"},
+            "commits": commits,
+        }]);
+        let mut runner = MockGitCliffRunner::new();
+        runner.expect_run().returning(move |_, _| {
+            Ok(Output {
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: serde_json::to_vec(&context).unwrap(),
+                stderr: vec![],
+            })
+        });
+
+        let result = run_git_cliff(Path::new("."), "example-api-v", &[], &[], Some(&runner))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result["version"], expected);
+        assert_eq!(result["previous"]["version"], "1.0.0");
+        assert_eq!(result["commits"], commits);
     }
 
     /// Tests that an empty JSON context from running `git-cliff` is handled gracefully.
