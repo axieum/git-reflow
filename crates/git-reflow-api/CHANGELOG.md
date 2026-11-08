@@ -1,3 +1,9 @@
+## [0.4.0] - 2026-11-08
+
+### 🚀 Features
+
+- *(api)* Add `Release-As` commit footer support for overriding versions (#16)
+
 ## [0.3.1] - 2026-11-07
 
 ### 🐛 Bug Fixes
