@@ -213,6 +213,75 @@ fn test_plan_command_with_include_changes(#[with("example-rust-workspace")] proj
     });
 }
 
+/// Tests that the `plan` command handles `Release-As: <version>` trailers in commit messages.
+#[rstest]
+fn test_plan_command_with_release_as_commit_trailer(
+    #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+) {
+    let (project_dir, repo) = project_repo;
+
+    // Commit the current files to the `main` branch.
+    repo.set_head("refs/heads/main").unwrap();
+    stage_and_commit(&repo, &["."], "chore: initial commit").unwrap();
+
+    // Create Git tags for the current versions of the packages.
+    let commit = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.tag_lightweight("v1.0.0", commit.as_object(), false).unwrap();
+    repo.tag_lightweight("example-api-v1.0.0", commit.as_object(), false)
+        .unwrap();
+    repo.tag_lightweight("example-cli-v1.0.0", commit.as_object(), false)
+        .unwrap();
+
+    // Create some changes in the packages and commit those changes.
+    let lib_rs_path = project_dir.path().join("crates/example-api/src/lib.rs");
+    writeln!(
+        fs::OpenOptions::new().append(true).open(&lib_rs_path).unwrap(),
+        "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
+    )
+    .unwrap();
+    stage_and_commit(
+        &repo,
+        &["."],
+        "feat(api): add a `subtract` function\n\nRelease-As: 2.1.3",
+    )
+    .unwrap();
+
+    let main_rs_path = project_dir.path().join("crates/example-cli/src/main.rs");
+    writeln!(
+        fs::OpenOptions::new().append(true).open(&main_rs_path).unwrap(),
+        "\npub fn subtract(a: i32, b: i32) -> i32 {{ example_api::subtract(5, 9) }}"
+    )
+    .unwrap();
+    stage_and_commit(
+        &repo,
+        &["."],
+        "feat(cli): consume the `subtract` function\n\nRelease-As: 3.2.1",
+    )
+    .unwrap();
+
+    // Run the `plan` command.
+    let mut cmd = Command::cargo_bin("git-reflow").unwrap();
+    let assert = cmd
+        .current_dir(&project_dir)
+        .arg("plan")
+        .arg("--show-context")
+        .assert()
+        .success();
+
+    // Verify that the expected versions were planned for.
+    let plan: Vec<serde_json::Value> = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    assert_eq!(plan[0]["next-version"], "3.2.1");
+    assert_eq!(plan[1]["next-version"], "2.1.3");
+    assert_eq!(plan[2]["next-version"], "3.2.1");
+    for release in &plan {
+        assert_eq!(release["context"]["version"], release["next-version"]);
+    }
+
+    insta::with_settings!({ filters => INSTA_STDOUT_FILTERS }, {
+        insta::assert_snapshot!(String::from_utf8_lossy(&assert.get_output().stdout));
+    });
+}
+
 /// Tests that the `plan` command allows showing the `git-cliff` context.
 #[rstest]
 fn test_plan_command_with_show_context(#[with("example-rust-workspace")] project_repo: (TempDir, Repository)) {

@@ -1,0 +1,635 @@
+---
+source: crates/git-reflow/tests/plan.rs
+expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
+---
+[
+  {
+    "package-name": "example-rust-workspace",
+    "current-version": "1.0.0",
+    "next-version": "3.2.1",
+    "commit-message": "chore: release v3.2.1",
+    "changelog-md": "## [3.2.1] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function\n- *(cli)* Consume the `subtract` function",
+    "dependencies": {},
+    "context": {
+      "azure_devops": {
+        "contributors": []
+      },
+      "bitbucket": {
+        "contributors": []
+      },
+      "bump_type": "minor",
+      "commit_id": "[COMMIT SHA]",
+      "commit_range": {
+        "from": "[COMMIT SHA]",
+        "to": "[COMMIT SHA]"
+      },
+      "commits": [
+        {
+          "author": {
+            "email": "test@localhost",
+            "name": "Test",
+            "timestamp": [COMMIT SHA]
+          },
+          "azure_devops": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "bitbucket": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "body": null,
+          "breaking": false,
+          "breaking_description": null,
+          "committer": {
+            "email": "test@localhost",
+            "name": "Test",
+            "timestamp": [COMMIT SHA]
+          },
+          "conventional": true,
+          "extra": null,
+          "footers": [
+            {
+              "breaking": false,
+              "separator": ":",
+              "token": "Release-As",
+              "value": "2.1.3"
+            }
+          ],
+          "gitea": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "github": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "gitlab": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "group": "<!-- 0 -->🚀 Features",
+          "id": "[COMMIT SHA]",
+          "links": [],
+          "merge_commit": false,
+          "message": "add a `subtract` function",
+          "raw_message": "feat(api): add a `subtract` function\n\nRelease-As: 2.1.3",
+          "scope": "api",
+          "statistics": {
+            "additions": 2,
+            "deletions": 0,
+            "files_changed": 1
+          }
+        },
+        {
+          "author": {
+            "email": "test@localhost",
+            "name": "Test",
+            "timestamp": [COMMIT SHA]
+          },
+          "azure_devops": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "bitbucket": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "body": null,
+          "breaking": false,
+          "breaking_description": null,
+          "committer": {
+            "email": "test@localhost",
+            "name": "Test",
+            "timestamp": [COMMIT SHA]
+          },
+          "conventional": true,
+          "extra": null,
+          "footers": [
+            {
+              "breaking": false,
+              "separator": ":",
+              "token": "Release-As",
+              "value": "3.2.1"
+            }
+          ],
+          "gitea": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "github": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "gitlab": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "group": "<!-- 0 -->🚀 Features",
+          "id": "[COMMIT SHA]",
+          "links": [],
+          "merge_commit": false,
+          "message": "consume the `subtract` function",
+          "raw_message": "feat(cli): consume the `subtract` function\n\nRelease-As: 3.2.1",
+          "scope": "cli",
+          "statistics": {
+            "additions": 2,
+            "deletions": 0,
+            "files_changed": 1
+          }
+        }
+      ],
+      "extra": null,
+      "gitea": {
+        "contributors": []
+      },
+      "github": {
+        "contributors": []
+      },
+      "gitlab": {
+        "contributors": []
+      },
+      "message": null,
+      "previous": {
+        "azure_devops": {
+          "contributors": []
+        },
+        "bitbucket": {
+          "contributors": []
+        },
+        "bump_type": null,
+        "commit_id": "[COMMIT SHA]",
+        "commit_range": null,
+        "commits": [],
+        "extra": null,
+        "gitea": {
+          "contributors": []
+        },
+        "github": {
+          "contributors": []
+        },
+        "gitlab": {
+          "contributors": []
+        },
+        "message": null,
+        "previous": null,
+        "repository": null,
+        "statistics": null,
+        "submodule_commits": {},
+        "timestamp": [COMMIT SHA],
+        "version": "1.0.0"
+      },
+      "repository": "[TEMPDIR]",
+      "statistics": {
+        "commit_count": 2,
+        "commits_timespan": 0,
+        "conventional_commit_count": 2,
+        "days_passed_since_last_release": 0,
+        "links": []
+      },
+      "submodule_commits": {},
+      "timestamp": [COMMIT SHA],
+      "version": "3.2.1"
+    }
+  },
+  {
+    "package-name": "example-api",
+    "current-version": "1.0.0",
+    "next-version": "2.1.3",
+    "commit-message": "chore(example-api): release v2.1.3",
+    "changelog-md": "## [2.1.3] - [DATE]\n\n### 🚀 Features\n\n- *(api)* Add a `subtract` function",
+    "dependencies": {},
+    "context": {
+      "azure_devops": {
+        "contributors": []
+      },
+      "bitbucket": {
+        "contributors": []
+      },
+      "bump_type": "minor",
+      "commit_id": "[COMMIT SHA]",
+      "commit_range": {
+        "from": "[COMMIT SHA]",
+        "to": "[COMMIT SHA]"
+      },
+      "commits": [
+        {
+          "author": {
+            "email": "test@localhost",
+            "name": "Test",
+            "timestamp": [COMMIT SHA]
+          },
+          "azure_devops": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "bitbucket": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "body": null,
+          "breaking": false,
+          "breaking_description": null,
+          "committer": {
+            "email": "test@localhost",
+            "name": "Test",
+            "timestamp": [COMMIT SHA]
+          },
+          "conventional": true,
+          "extra": null,
+          "footers": [
+            {
+              "breaking": false,
+              "separator": ":",
+              "token": "Release-As",
+              "value": "2.1.3"
+            }
+          ],
+          "gitea": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "github": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "gitlab": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "group": "<!-- 0 -->🚀 Features",
+          "id": "[COMMIT SHA]",
+          "links": [],
+          "merge_commit": false,
+          "message": "add a `subtract` function",
+          "raw_message": "feat(api): add a `subtract` function\n\nRelease-As: 2.1.3",
+          "scope": "api",
+          "statistics": {
+            "additions": 2,
+            "deletions": 0,
+            "files_changed": 1
+          }
+        }
+      ],
+      "extra": null,
+      "gitea": {
+        "contributors": []
+      },
+      "github": {
+        "contributors": []
+      },
+      "gitlab": {
+        "contributors": []
+      },
+      "message": null,
+      "previous": {
+        "azure_devops": {
+          "contributors": []
+        },
+        "bitbucket": {
+          "contributors": []
+        },
+        "bump_type": null,
+        "commit_id": "[COMMIT SHA]",
+        "commit_range": null,
+        "commits": [],
+        "extra": null,
+        "gitea": {
+          "contributors": []
+        },
+        "github": {
+          "contributors": []
+        },
+        "gitlab": {
+          "contributors": []
+        },
+        "message": null,
+        "previous": null,
+        "repository": null,
+        "statistics": null,
+        "submodule_commits": {},
+        "timestamp": [COMMIT SHA],
+        "version": "1.0.0"
+      },
+      "repository": "[TEMPDIR]",
+      "statistics": {
+        "commit_count": 1,
+        "conventional_commit_count": 1,
+        "days_passed_since_last_release": 0,
+        "links": []
+      },
+      "submodule_commits": {},
+      "timestamp": [COMMIT SHA],
+      "version": "2.1.3"
+    }
+  },
+  {
+    "package-name": "example-cli",
+    "current-version": "1.0.0",
+    "next-version": "3.2.1",
+    "commit-message": "chore(example-cli): release v3.2.1",
+    "changelog-md": "## [3.2.1] - [DATE]\n\n### 🚀 Features\n\n- *(cli)* Consume the `subtract` function\n\n### 🐛 Bug Fixes\n\n- *(deps)* Update dependency `example-api` to v2.1.3",
+    "dependencies": {
+      "example-api": "2.1.3"
+    },
+    "context": {
+      "azure_devops": {
+        "contributors": []
+      },
+      "bitbucket": {
+        "contributors": []
+      },
+      "bump_type": "minor",
+      "commit_id": "[COMMIT SHA]",
+      "commit_range": {
+        "from": "[COMMIT SHA]",
+        "to": ""
+      },
+      "commits": [
+        {
+          "author": {
+            "email": "test@localhost",
+            "name": "Test",
+            "timestamp": [COMMIT SHA]
+          },
+          "azure_devops": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "bitbucket": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "body": null,
+          "breaking": false,
+          "breaking_description": null,
+          "committer": {
+            "email": "test@localhost",
+            "name": "Test",
+            "timestamp": [COMMIT SHA]
+          },
+          "conventional": true,
+          "extra": null,
+          "footers": [
+            {
+              "breaking": false,
+              "separator": ":",
+              "token": "Release-As",
+              "value": "3.2.1"
+            }
+          ],
+          "gitea": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "github": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "gitlab": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "group": "<!-- 0 -->🚀 Features",
+          "id": "[COMMIT SHA]",
+          "links": [],
+          "merge_commit": false,
+          "message": "consume the `subtract` function",
+          "raw_message": "feat(cli): consume the `subtract` function\n\nRelease-As: 3.2.1",
+          "scope": "cli",
+          "statistics": {
+            "additions": 2,
+            "deletions": 0,
+            "files_changed": 1
+          }
+        },
+        {
+          "author": {
+            "email": null,
+            "name": null,
+            "timestamp": 0
+          },
+          "azure_devops": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "bitbucket": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "body": null,
+          "breaking": false,
+          "breaking_description": null,
+          "committer": {
+            "email": null,
+            "name": null,
+            "timestamp": 0
+          },
+          "conventional": true,
+          "extra": null,
+          "footers": [],
+          "gitea": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "github": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "gitlab": {
+            "is_first_time": false,
+            "pr_author": null,
+            "pr_labels": [],
+            "pr_number": null,
+            "pr_numbers": [],
+            "pr_title": null,
+            "username": null
+          },
+          "group": "<!-- 1 -->🐛 Bug Fixes",
+          "id": "",
+          "links": [],
+          "merge_commit": false,
+          "message": "update dependency `example-api` to v2.1.3",
+          "raw_message": "fix(deps): update dependency `example-api` to v2.1.3",
+          "scope": "deps",
+          "statistics": {
+            "additions": 0,
+            "deletions": 0,
+            "files_changed": 0
+          }
+        }
+      ],
+      "extra": null,
+      "gitea": {
+        "contributors": []
+      },
+      "github": {
+        "contributors": []
+      },
+      "gitlab": {
+        "contributors": []
+      },
+      "message": null,
+      "previous": {
+        "azure_devops": {
+          "contributors": []
+        },
+        "bitbucket": {
+          "contributors": []
+        },
+        "bump_type": null,
+        "commit_id": "[COMMIT SHA]",
+        "commit_range": null,
+        "commits": [],
+        "extra": null,
+        "gitea": {
+          "contributors": []
+        },
+        "github": {
+          "contributors": []
+        },
+        "gitlab": {
+          "contributors": []
+        },
+        "message": null,
+        "previous": null,
+        "repository": null,
+        "statistics": null,
+        "submodule_commits": {},
+        "timestamp": [COMMIT SHA],
+        "version": "1.0.0"
+      },
+      "repository": "[TEMPDIR]",
+      "statistics": {
+        "commit_count": 2,
+        "commits_timespan": 20765,
+        "conventional_commit_count": 2,
+        "days_passed_since_last_release": 0,
+        "links": []
+      },
+      "submodule_commits": {},
+      "timestamp": [COMMIT SHA],
+      "version": "3.2.1"
+    }
+  }
+]
