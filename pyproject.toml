@@ -1,0 +1,23 @@
+[project]
+name = "git-reflow-rs"
+dynamic = ["version"]
+requires-python = ">=3.7"
+classifiers = [
+    "Intended Audience :: Developers",
+    "Topic :: Software Development",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+    "git-cliff>=2.14.0,<3.0.0",
+]
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "crates/git-reflow/Cargo.toml"
+module-name = "git-reflow"
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"

@@ -27,6 +27,14 @@ _A tool for automating semantic releases by raising pull-requests when commits e
 cargo install git-reflow --locked
 ```
 
+<details id="pypi">
+<summary>via Python</summary>
+
+```shell
+uv tool install git-reflow-rs
+```
+</details>
+
 ### Feature Flags
 
 - `bitbucket` - Bitbucket provider support
