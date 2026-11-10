@@ -1,3 +1,9 @@
+## [1.0.0] - 2026-11-10
+
+### 🚀 Features
+
+- [**breaking**] Initial release
+
 ## [0.4.0] - 2026-11-08
 
 ### 🚀 Features

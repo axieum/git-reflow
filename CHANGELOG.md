@@ -1,3 +1,13 @@
+## [1.0.0] - 2026-11-10
+
+### 🚀 Features
+
+- [**breaking**] Initial release
+
+### 🐛 Bug Fixes
+
+- *(deps)* Update dependency `git-reflow-api` to v1.0.0
+
 ## [0.4.0] - 2026-11-08
 
 ### 🚀 Features
