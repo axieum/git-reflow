@@ -232,7 +232,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       "repository": "[TEMPDIR]",
       "statistics": {
         "commit_count": 2,
-        "commits_timespan": 0,
+        "commits_timespan": [TIMESPAN],
         "conventional_commit_count": 2,
         "days_passed_since_last_release": 0,
         "links": []
@@ -622,7 +622,7 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
       "repository": "[TEMPDIR]",
       "statistics": {
         "commit_count": 2,
-        "commits_timespan": 20765,
+        "commits_timespan": [TIMESPAN],
         "conventional_commit_count": 2,
         "days_passed_since_last_release": 0,
         "links": []

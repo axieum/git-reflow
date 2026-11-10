@@ -4,12 +4,13 @@ use rstest::*;
 use std::path::PathBuf;
 
 /// A list of [Insta](https://insta.rs/docs) snapshot testing filters of CLI stdout.
-pub const INSTA_STDOUT_FILTERS: [(&str, &str); 5] = [
+pub const INSTA_STDOUT_FILTERS: [(&str, &str); 6] = [
     (r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{6}Z", "[TIMESTAMP]"),
     (r"\d{4}-\d{2}-\d{2}", "[DATE]"),
     (r"\.tmp\w{6}", "[TEMPDIR]"),
     (r#""[^"]*\[TEMPDIR\]""#, r#""[TEMPDIR]""#), // NB: Turns "/home/**/[TEMPDIR]" into "[TEMPDIR]".
     (r"[a-f0-9]{7,40}", "[COMMIT SHA]"),
+    (r#""commits_timespan": \d+"#, r#""commits_timespan": [TIMESPAN]"#), // NB: `git-cliff` context.
 ];
 
 /// Returns the path to a test project fixture.
