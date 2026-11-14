@@ -21,43 +21,15 @@ _A tool for automating semantic releases by raising pull-requests when commits e
   - [Gitea] (coming soon)
   - [Bitbucket]
 
-## Installation
+## Documentation
 
-```shell
-cargo install git-reflow --locked
-```
+New to `git-reflow`? Start with the [installation guide](docs/01-installation.md), then explore the following guides:
 
-<details id="pypi">
-<summary>via Python</summary>
-
-```shell
-uv tool install git-reflow-rs
-```
-</details>
-
-### Feature Flags
-
-- `bitbucket` - Bitbucket provider support
-- `github` - GitHub provider support
-
-**Default features:** `github`, `bitbucket`.
-
-## Usage
-
-```bash
-git reflow help
-```
-
-## Configuring
-
-Print the current configuration for your project:
-
-```bash
-git reflow config
-```
-
-The following files are attempted in order: `.reflow.json`, `.reflow.json5`, `.reflow.jsonc`,
-`.reflow.toml`, `.reflow.yaml`, `.reflow.yml`.
+- [Configuration](docs/02-configuration.md) &mdash; configure packages and release settings.
+- [Commands](docs/03-commands.md) &mdash; explore the available commands.
+- [Planning releases](docs/04-plan.md) &mdash; preview and review release changes.
+- [Release pull requests](docs/05-pr.md) &mdash; create or update release pull requests.
+- [Publishing releases](docs/06-release.md) &mdash; tag and release your packages.
 
 # Licence
 
