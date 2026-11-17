@@ -15,6 +15,28 @@ expression: "String::from_utf8_lossy(&assert.get_output().stdout)"
     "separate-pull-requests": false,
     "tag-major-and-minor": true
   },
+  "branches": [
+    {
+      "name": "^(main|master)$",
+      "pre-release": null
+    },
+    {
+      "name": "^release/.+$",
+      "pre-release": "rc"
+    },
+    {
+      "name": "^dev(elop)?$",
+      "pre-release": "beta"
+    },
+    {
+      "name": "^beta$",
+      "pre-release": "beta"
+    },
+    {
+      "name": "^alpha$",
+      "pre-release": "alpha"
+    }
+  ],
   "exclude": [],
   "packages": [
     {

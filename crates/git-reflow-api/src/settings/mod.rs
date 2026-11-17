@@ -1,11 +1,14 @@
+use crate::settings::branch::BranchConfig;
 use crate::settings::git::GitConfig;
 use crate::settings::pkg::PackageConfig;
 use crate::strategy::BaseStrategy;
 use anyhow::{Context, ensure};
 use config::{Config, Environment, File};
+use regex::regex;
 use std::path::PathBuf;
 use tracing::{debug, trace};
 
+pub mod branch;
 pub mod git;
 pub mod pkg;
 
@@ -13,10 +16,13 @@ pub mod pkg;
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct AppConfig {
-    /// The Git provider configuration.
+    /// The Git configuration.
     #[serde(default = "deserialize_empty_struct")]
     pub git: GitConfig,
-    /// A list of path globs, compiled when deserialized, to exclude from package discovery.
+    /// A list of branch configurations.
+    #[serde(default = "default_branches")]
+    pub branches: Vec<BranchConfig>,
+    /// A list of path globs to exclude from package discovery.
     #[serde(
         default,
         deserialize_with = "deserialize_exclude",
@@ -26,6 +32,37 @@ pub struct AppConfig {
     /// A list of package configurations.
     #[serde(default = "default_packages")]
     pub packages: Vec<PackageConfig>,
+}
+
+/// Returns the default value for `$.branches`.
+fn default_branches() -> Vec<BranchConfig> {
+    vec![
+        // main | master -> stable
+        BranchConfig {
+            name: regex!(r"^(main|master)$").clone(),
+            pre_release: None,
+        },
+        // release/* -> rc
+        BranchConfig {
+            name: regex!(r"^release/.+$").clone(),
+            pre_release: Some("rc".to_string()),
+        },
+        // dev | develop -> beta
+        BranchConfig {
+            name: regex!(r"^dev(elop)?$").clone(),
+            pre_release: Some("beta".to_string()),
+        },
+        // beta -> beta
+        BranchConfig {
+            name: regex!(r"^beta$").clone(),
+            pre_release: Some("beta".to_string()),
+        },
+        // alpha -> alpha
+        BranchConfig {
+            name: regex!(r"^alpha$").clone(),
+            pre_release: Some("alpha".to_string()),
+        },
+    ]
 }
 
 /// Returns the default value for `$.packages`.
