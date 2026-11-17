@@ -51,4 +51,5 @@ runs:
         COMMAND: ${{ inputs.command }}
         CONFIG: ${{ inputs.config }}
         GITHUB_TOKEN: ${{ inputs.token }}
-      run: .github/scripts/action.sh
+      run: |
+        "${GITHUB_ACTION_PATH}/.github/scripts/action.sh"
