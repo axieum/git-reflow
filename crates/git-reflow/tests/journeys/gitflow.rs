@@ -67,15 +67,16 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
     assert_eq!(develop_head.parent_id(1).unwrap(), feature_commit);
     push_branch(&repo, "develop", false).unwrap();
 
-    // Plan the feature release on `develop`.
+    // Plan the beta feature release on `develop`.
     let mut changelog_md = String::new();
     assert_reflow_plan(&project_dir, &["--show-context"], |plan| {
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0]["package-name"], "example-rust");
         assert_eq!(plan[0]["current-version"], "1.0.0");
-        assert_eq!(plan[0]["next-version"], "1.1.0");
-        assert_eq!(plan[0]["commit-message"], "chore: release v1.1.0");
+        assert_eq!(plan[0]["next-version"], "1.1.0-beta.1");
+        assert_eq!(plan[0]["commit-message"], "chore: release v1.1.0-beta.1");
         assert_eq!(plan[0]["dependencies"], json!({}));
+        assert_eq!(plan[0]["context"]["version"], "1.1.0-beta.1");
         assert!(
             plan[0]["context"]["commits"]
                 .as_array()
@@ -84,13 +85,13 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
                 .any(|commit| commit["id"] == feature_commit.to_string())
         );
         changelog_md = plan[0]["changelog-md"].as_str().unwrap().to_string();
-        assert!(changelog_md.starts_with("## [1.1.0] - "));
+        assert!(changelog_md.starts_with("## [1.1.0-beta.1] - "));
         assert!(changelog_md.contains("Add a `subtract` function"));
     });
 
     let package = PullRequestPackage {
         name: "example-rust".to_string(),
-        version: "1.1.0".parse().unwrap(),
+        version: "1.1.0-beta.1".parse().unwrap(),
         changelog_md: Some(changelog_md.clone()),
     };
     let pr_body = build_pull_request_body([package.clone()]).unwrap();
@@ -98,7 +99,7 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
         "../../../git-reflow-api/tests/fixtures/github_pulls_retrieve.json"
     ))
     .unwrap();
-    github_pr["title"] = json!("chore: release v1.1.0");
+    github_pr["title"] = json!("chore: release v1.1.0-beta.1");
     github_pr["body"] = json!(pr_body);
     github_pr["head"]["ref"] = json!("reflow--branches--develop");
     github_pr["base"]["ref"] = json!("develop");
@@ -114,7 +115,7 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
         when.method(POST)
             .path("/repos/octocat/Hello-World/pulls")
             .json_body(json!({
-                "title": "chore: release v1.1.0",
+                "title": "chore: release v1.1.0-beta.1",
                 "head": "reflow--branches--develop",
                 "base": "develop",
                 "body": pr_body,
@@ -129,7 +130,7 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
             &[json!({
                 "number": 1347,
                 "url": "https://github.com/octocat/Hello-World/pull/1347",
-                "title": "chore: release v1.1.0",
+                "title": "chore: release v1.1.0-beta.1",
                 "body": pr_body,
                 "head": "reflow--branches--develop",
                 "base": "develop",
@@ -147,7 +148,7 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
         .unwrap()
         .peel_to_commit()
         .unwrap();
-    assert_eq!(release_commit.message().unwrap(), "chore: release v1.1.0");
+    assert_eq!(release_commit.message().unwrap(), "chore: release v1.1.0-beta.1");
     assert_eq!(release_commit.parent_count(), 1);
     assert_eq!(release_commit.parent_id(0).unwrap(), develop_head.id());
     let diff = remote_repo
@@ -188,7 +189,7 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
 
     for filename in ["Cargo.toml", "Cargo.lock"] {
         let contents = fs::read_to_string(project_dir.child(filename)).unwrap();
-        assert!(contents.contains("version = \"1.1.0\""), "{filename}");
+        assert!(contents.contains("version = \"1.1.0-beta.1\""), "{filename}");
         assert!(!contents.contains("version = \"1.0.0\""), "{filename}");
     }
     assert_eq!(
@@ -211,7 +212,8 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
         then.status(200).json_body(json!([github_pr]));
     });
     let get_release_mock = server.mock(|when, then| {
-        when.method(GET).path("/repos/octocat/Hello-World/releases/tags/v1.1.0");
+        when.method(GET)
+            .path("/repos/octocat/Hello-World/releases/tags/v1.1.0-beta.1");
         then.status(404).json_body(json!({ "message": "Not Found" }));
     });
     let create_release_mock = server.mock(|when, then| {
@@ -219,18 +221,18 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
             "../../../git-reflow-api/tests/fixtures/github_releases_retrieve.json"
         ))
         .unwrap();
-        release["html_url"] = json!("https://github.com/octocat/Hello-World/releases/v1.1.0");
-        release["tag_name"] = json!("v1.1.0");
+        release["html_url"] = json!("https://github.com/octocat/Hello-World/releases/v1.1.0-beta.1");
+        release["tag_name"] = json!("v1.1.0-beta.1");
         release["target_commitish"] = json!(released_head.id().to_string());
-        release["name"] = json!("v1.1.0");
+        release["name"] = json!("v1.1.0-beta.1");
         release["body"] = json!(changelog_md);
 
         when.method(POST)
             .path("/repos/octocat/Hello-World/releases")
             .json_body(json!({
-                "tag_name": "v1.1.0",
+                "tag_name": "v1.1.0-beta.1",
                 "target_commitish": released_head.id().to_string(),
-                "name": "v1.1.0",
+                "name": "v1.1.0-beta.1",
                 "body": changelog_md,
                 "make_latest": "true",
             }));
@@ -243,14 +245,14 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
             releases,
             &[json!({
                 "package-name": "example-rust",
-                "version": "1.1.0",
+                "version": "1.1.0-beta.1",
                 "major": 1,
                 "minor": 1,
                 "patch": 0,
-                "pre": null,
+                "pre": "beta.1",
                 "build": null,
-                "tag-name": "v1.1.0",
-                "url": "https://github.com/octocat/Hello-World/releases/v1.1.0",
+                "tag-name": "v1.1.0-beta.1",
+                "url": "https://github.com/octocat/Hello-World/releases/v1.1.0-beta.1",
                 "changelog-md": changelog_md,
             })],
         );
@@ -259,9 +261,9 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
     assert_eq!(repo.head().unwrap().target().unwrap(), released_head.id());
     assert!(repo.statuses(None).unwrap().is_empty(), "uncommitted changes");
 
-    // Stable releases are already tagged, so forward merges have nothing left to release.
-    // todo: Assert alpha/beta/RC tags and promotions once branch-based prereleases are supported.
-    for (branch, source) in [("release", "develop"), ("main", "release")] {
+    // The beta release is already tagged, so forward merges have no unreleased changes.
+    // todo: Assert RC and stable promotions once channel changes alone can trigger a release.
+    for (branch, source) in [("release/1.1.0", "develop"), ("main", "release/1.1.0")] {
         let main_commit = repo.refname_to_id("refs/heads/main").unwrap();
         create_or_reset_branch(&repo, branch, main_commit).unwrap();
         assert_reflow_plan(&project_dir, &[], |plan| assert!(plan.is_empty()));
@@ -299,8 +301,8 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
         let names = repository.tag_names(None).unwrap();
         let mut names = names.iter().map(|name| name.unwrap().unwrap()).collect::<Vec<_>>();
         names.sort_unstable();
-        assert_eq!(names, ["v1", "v1.0.0", "v1.1", "v1.1.0"]);
-        for name in ["v1.1.0", "v1.1", "v1"] {
+        assert_eq!(names, ["v1.0.0", "v1.1.0-beta.1"]);
+        for (name, commit) in [("v1.0.0", initial_commit), ("v1.1.0-beta.1", released_head.id())] {
             assert_eq!(
                 repository
                     .find_reference(&format!("refs/tags/{name}"))
@@ -308,7 +310,7 @@ fn test_gitflow_workflow(#[with("example-rust")] project_repo: (TempDir, Reposit
                     .peel_to_commit()
                     .unwrap()
                     .id(),
-                released_head.id(),
+                commit,
             );
         }
     }

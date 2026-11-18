@@ -2,6 +2,7 @@ use crate::git_cliff::{get_version_from_git_cliff_context, render_changelog_mark
 use crate::release::build_git_tag_name;
 use crate::settings::{AppConfig, pkg::PackageConfig};
 use crate::strategy::BaseStrategy;
+use crate::version::apply_pre_release;
 use anyhow::{Context, bail};
 use handlebars::Handlebars;
 use semver::Version;
@@ -77,22 +78,32 @@ pub async fn plan_releases(
 
         // Run `git-cliff` in the package directory.
         let tag_prefix = build_git_tag_name(pkg, &pkg_name, "")?;
-        let context = match run_git_cliff(&pkg.dir, &tag_prefix, &pkg.include_changes, &extra_commits, None)? {
-            // If the context contains a bump type, it indicates that there are changes to be released.
-            // If the context does not contain a previous version, it also indicates that this is the first release.
-            Some(ctx) if !ctx["bump_type"].is_null() || ctx["previous"].is_null() => {
-                debug!("{} has unreleased changes ✏️", pkg_name);
-                ctx
-            }
-            // Otherwise, there are no changes to be released.
-            _ => {
-                debug!("{} is up-to-date ✅", pkg_name);
-                continue;
-            }
-        };
+        let (mut context, version_overriden) =
+            match run_git_cliff(&pkg.dir, &tag_prefix, &pkg.include_changes, &extra_commits, None)? {
+                // If the context contains commits, it indicates that there are changes to be released.
+                // If the context does not contain a previous version, it indicates that this is the first release.
+                Some((ctx, version_overriden))
+                    if ctx["commits"].as_array().is_some_and(|commits| !commits.is_empty())
+                        || ctx["previous"].is_null() =>
+                {
+                    debug!("{} has unreleased changes ✏️", pkg_name);
+                    (ctx, version_overriden)
+                }
+                // Otherwise, there are no changes to be released.
+                _ => {
+                    debug!("{} is up-to-date ✅", pkg_name);
+                    continue;
+                }
+            };
 
-        // Parse the version and render the changelog Markdown for this package.
-        let (current_version, next_version) = get_version_from_git_cliff_context(&context, &tag_prefix)?;
+        // Parse the version for this package.
+        let (current_version, mut next_version) = get_version_from_git_cliff_context(&context, &tag_prefix)?;
+        if !version_overriden && let Some(branch) = config.branches.iter().find(|b| b.name.is_match(target_branch)) {
+            next_version = apply_pre_release(next_version, branch.pre_release.as_deref());
+        }
+        context["version"] = json!(next_version.to_string());
+
+        // Render the changelog Markdown for this package.
         let changelog_md = render_changelog_markdown(&context, None)?;
 
         // Render the commit message for this package release.
@@ -301,6 +312,110 @@ mod tests {
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].package_name, "example-api");
         assert!(planned[0].dependencies.is_empty());
+    }
+
+    /// Tests that pre-release branches apply their channel unless a `Release-As` footer overrides the version.
+    #[rstest]
+    #[tokio::test]
+    async fn test_plan_releases_with_pre_release_branch(
+        #[with("example-rust-workspace")] project_repo: (TempDir, Repository),
+    ) {
+        let (project_dir, repo) = project_repo;
+
+        // Load the configuration for the project repository.
+        std::env::set_current_dir(&project_dir).unwrap();
+        let config = crate::settings::load(None).unwrap();
+
+        // Commit the current files to the `develop` branch.
+        repo.set_head("refs/heads/develop").unwrap();
+        stage_and_commit(&repo, ["."], "chore: initial commit").unwrap();
+
+        // Create Git tags for the current versions of the packages.
+        let commit = repo.head().unwrap().peel_to_commit().unwrap();
+        for tag in ["v1.0.0", "example-api-v1.0.0-beta.1", "example-cli-v1.0.0-rc.2"] {
+            repo.tag_lightweight(tag, commit.as_object(), false).unwrap();
+        }
+
+        // Create some changes in the packages and commit those changes.
+        let lib_rs_path = project_dir.path().join("crates/example-api/src/lib.rs");
+        writeln!(
+            fs::OpenOptions::new().append(true).open(&lib_rs_path).unwrap(),
+            "\npub fn subtract(a: i32, b: i32) -> i32 {{ a - b }}"
+        )
+        .unwrap();
+        stage_and_commit(&repo, ["."], "feat(api): add a `subtract` function").unwrap();
+
+        // Call `plan_releases` and assert that the planned releases are as expected.
+        // NB: We expect three planned releases: one for the root package, one for the `example-api` package, and
+        //     one for the `example-cli` package since it depends on `example-api`.
+        let planned = plan_releases(&config, &[], "develop").await.unwrap();
+        assert_eq!(planned.len(), 3);
+        assert_eq!(planned[0].package_name, "example-rust-workspace");
+        assert_eq!(planned[1].package_name, "example-api");
+        assert_eq!(planned[2].package_name, "example-cli");
+        assert_eq!(planned[0].current_version, Some(Version::parse("1.0.0").unwrap()));
+        assert_eq!(
+            planned[1].current_version,
+            Some(Version::parse("1.0.0-beta.1").unwrap())
+        );
+        assert_eq!(planned[2].current_version, Some(Version::parse("1.0.0-rc.2").unwrap()));
+        assert_eq!(planned[0].next_version, Version::parse("1.1.0-beta.1").unwrap());
+        assert_eq!(planned[1].next_version, Version::parse("1.0.0-beta.2").unwrap());
+        assert_eq!(planned[2].next_version, Version::parse("1.0.0-beta.1").unwrap());
+        assert_eq!(planned[0].commit_message, "chore: release v1.1.0-beta.1");
+        assert_eq!(planned[1].commit_message, "chore(example-api): release v1.0.0-beta.2");
+        assert_eq!(planned[2].commit_message, "chore(example-cli): release v1.0.0-beta.1");
+        assert!(!planned[0].changelog_md.is_empty());
+        assert!(!planned[1].changelog_md.is_empty());
+        assert!(
+            planned[2]
+                .changelog_md
+                .contains("Update dependency `example-api` to v1.0.0-beta.2")
+        );
+        assert_eq!(
+            planned[2].dependencies,
+            HashMap::from([("example-api".to_string(), planned[1].next_version.clone())]),
+        );
+        for release in &planned {
+            assert_eq!(release.context["version"], release.next_version.to_string());
+            assert!(release.changelog_md.contains(&release.next_version.to_string()));
+        }
+
+        // Create another change and commit it with an explicit `Release-As: <version>` footer.
+        writeln!(
+            fs::OpenOptions::new().append(true).open(&lib_rs_path).unwrap(),
+            "\npub fn multiply(a: i32, b: i32) -> i32 {{ a * b }}"
+        )
+        .unwrap();
+        stage_and_commit(
+            &repo,
+            ["."],
+            "feat(api): add a `multiply` function\n\nRelease-As: 2.0.0",
+        )
+        .unwrap();
+
+        // Plan again and assert that the override bypasses the branch's pre-release channel.
+        let planned = plan_releases(&config, &[], "develop").await.unwrap();
+        assert_eq!(planned.len(), 3);
+        for release in &planned[..2] {
+            assert_eq!(release.next_version, Version::parse("2.0.0").unwrap());
+            assert_eq!(release.context["version"], "2.0.0");
+            assert!(release.changelog_md.contains("2.0.0"));
+        }
+        assert_eq!(planned[0].commit_message, "chore: release v2.0.0");
+        assert_eq!(planned[1].commit_message, "chore(example-api): release v2.0.0");
+
+        // The dependent package still follows the branch's pre-release channel.
+        assert_eq!(planned[2].next_version, Version::parse("1.0.0-beta.1").unwrap());
+        assert_eq!(
+            planned[2].dependencies,
+            HashMap::from([("example-api".to_string(), planned[1].next_version.clone())]),
+        );
+        assert!(
+            planned[2]
+                .changelog_md
+                .contains("Update dependency `example-api` to v2.0.0")
+        );
     }
 
     /// Tests that the dependency graph is built correctly.
