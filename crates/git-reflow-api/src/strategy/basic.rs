@@ -14,7 +14,7 @@ pub struct BasicStrategy {
 }
 
 impl BaseStrategy for BasicStrategy {
-    /// Writes a new version to the `VERSION.txt` file.
+    /// Writes a new version to the `VERSION.txt` file, if it exists.
     ///
     /// # Arguments
     ///
@@ -32,13 +32,18 @@ impl BaseStrategy for BasicStrategy {
         dry_run: bool,
     ) -> anyhow::Result<Vec<PathBuf>> {
         let path = config.dir.join("VERSION.txt");
-        if !dry_run {
-            debug!("write `v{}` to `{}`", new_version, path.display());
-            std::fs::write(&path, format!("v{new_version}"))?;
+        if path.try_exists()? {
+            if !dry_run {
+                debug!("write `v{}` to `{}`", new_version, path.display());
+                std::fs::write(&path, format!("v{new_version}"))?;
+            } else {
+                debug!("write `v{}` to `{}` (dry run)", new_version, path.display());
+            }
+            Ok(vec![path])
         } else {
-            debug!("write `v{}` to `{}` (dry run)", new_version, path.display());
+            debug!("`{}` does not exist, skipping", path.display());
+            Ok(vec![])
         }
-        Ok(vec![path])
     }
 
     fn write_dependency_versions(
@@ -94,7 +99,25 @@ mod tests {
 
     /// Tests that the version is written to a file in the package root.
     #[rstest]
-    fn write_version(strategy: BasicStrategy) {
+    fn test_write_version(strategy: BasicStrategy) {
+        let dir = TempDir::new().unwrap();
+        let config = PackageConfig {
+            dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        dir.child("VERSION.txt").write_str("v1.2.3-rc.1").unwrap();
+
+        let changed_files = strategy
+            .write_version(&Version::parse("1.2.3-rc.2").unwrap(), &config, false)
+            .unwrap();
+
+        dir.child("VERSION.txt").assert("v1.2.3-rc.2");
+        assert_eq!(changed_files, vec![config.dir.join("VERSION.txt")]);
+    }
+
+    /// Tests that the version is *not* written to a file in the package root when it does not exist yet.
+    #[rstest]
+    fn test_write_version_when_file_does_not_exist(strategy: BasicStrategy) {
         let dir = TempDir::new().unwrap();
         let config = PackageConfig {
             dir: dir.path().to_path_buf(),
@@ -105,13 +128,13 @@ mod tests {
             .write_version(&Version::parse("1.2.3-rc.2").unwrap(), &config, false)
             .unwrap();
 
-        dir.child("VERSION.txt").assert("v1.2.3-rc.2");
-        assert_eq!(changed_files, vec![config.dir.join("VERSION.txt")]);
+        assert!(!dir.child("VERSION.txt").exists());
+        assert!(changed_files.is_empty());
     }
 
     /// Tests that the version is *not* written to a file in the package root when performing a dry run.
     #[rstest]
-    fn write_version_with_dry_run(strategy: BasicStrategy) {
+    fn test_write_version_with_dry_run(strategy: BasicStrategy) {
         let dir = TempDir::new().unwrap();
         let config = PackageConfig {
             dir: dir.path().to_path_buf(),
@@ -133,7 +156,11 @@ mod tests {
     #[case::multi_level("crates/git-reflow-api", Ok("git-reflow-api"))]
     #[case::relative_path("./magic", Ok("magic"))]
     #[case::root_dir("/", Err("no valid directory name found"))]
-    fn suggest_name_for_dir(strategy: BasicStrategy, #[case] filename: &str, #[case] expected: Result<&str, &str>) {
+    fn test_suggest_name_for_dir(
+        strategy: BasicStrategy,
+        #[case] filename: &str,
+        #[case] expected: Result<&str, &str>,
+    ) {
         let result = strategy.suggest_name(Path::new(filename));
         match (result, expected) {
             (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
@@ -144,7 +171,7 @@ mod tests {
 
     /// Tests that the suggested name for the current directory is its folder name.
     #[rstest]
-    fn suggest_name_for_current_dir(strategy: BasicStrategy) {
+    fn test_suggest_name_for_current_dir(strategy: BasicStrategy) {
         let dir = std::env::current_dir().unwrap();
         let dir_name = dir.file_name().unwrap().to_str().unwrap().to_string();
         assert_eq!(strategy.suggest_name(Path::new(".")).unwrap(), dir_name);
@@ -152,7 +179,7 @@ mod tests {
 
     /// Tests that there are no suggested packages.
     #[rstest]
-    fn suggest_packages(strategy: BasicStrategy) {
+    fn test_suggest_packages(strategy: BasicStrategy) {
         assert_eq!(strategy.suggest_packages(Path::new(".")).unwrap().len(), 0);
     }
 }
