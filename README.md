@@ -32,6 +32,12 @@ New to `git-reflow`? Start with the [installation guide](docs/01-installation.md
 - [Publishing releases](docs/06-release.md) &mdash; tag and release your packages.
 - [GitHub Action](docs/07-github-action.md) &mdash; automate releases in GitHub Actions.
 
+## AI Usage
+
+This project was **written by hand**, with _assistance_ from AI tools.
+
+When submitting pull requests, please ensure that you review the code you are contributing.
+
 # Licence
 
 `git-reflow` is open-sourced software licenced under the [MIT licence][licence].
