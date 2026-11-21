@@ -1,3 +1,9 @@
+## [1.0.1] - 2026-11-21
+
+### 🐛 Bug Fixes
+
+- *(api)* Do not write `VERSION.txt` during basic strategy when it does not exist
+
 ## [1.0.0] - 2026-11-10
 
 ### 🚀 Features

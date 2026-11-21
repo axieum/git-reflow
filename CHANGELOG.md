@@ -1,3 +1,10 @@
+## [1.0.1] - 2026-11-21
+
+### 🐛 Bug Fixes
+
+- *(api)* Do not write `VERSION.txt` during basic strategy when it does not exist
+- *(deps)* Update dependency `git-reflow-api` to v1.0.1
+
 ## [1.0.0] - 2026-11-10
 
 ### 🚀 Features
