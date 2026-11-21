@@ -30,6 +30,7 @@ New to `git-reflow`? Start with the [installation guide](docs/01-installation.md
 - [Planning releases](docs/04-plan.md) &mdash; preview and review release changes.
 - [Release pull requests](docs/05-pr.md) &mdash; create or update release pull requests.
 - [Publishing releases](docs/06-release.md) &mdash; tag and release your packages.
+- [GitHub Action](docs/07-github-action.md) &mdash; automate releases in GitHub Actions.
 
 # Licence
 

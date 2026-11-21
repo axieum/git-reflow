@@ -1,6 +1,6 @@
 # Commands
 
-This chapter describes all the available commands.
+This chapter describes all the available [`git-reflow`] commands.
 
 * [git reflow plan ↗](./04-plan.md)
 * [git reflow pr ↗](./05-pr.md)
@@ -28,3 +28,5 @@ Options:
   -h, --help           Print help
   -V, --version        Print version
 ```
+
+[`git-reflow`]: ../README.md

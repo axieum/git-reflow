@@ -1,6 +1,6 @@
 # Configuration
 
-This chapter describes how to configure `git-reflow` for your project.
+This chapter describes how to configure [`git-reflow`] for your project.
 
 Let's start by printing the current configuration for your project:
 
@@ -8,7 +8,7 @@ Let's start by printing the current configuration for your project:
 git reflow config
 ```
 
-If the default configuration does not suit your needs, you can create a configuration file in your repository:
+If the default configuration does not suit your needs, you can create any of the configuration files in your repository:
 
 1. `.reflow.json`
 2. `.reflow.json5`
@@ -68,8 +68,11 @@ tag_via_api = true
 # The directory of the package root.
 dir = "."
 # The name of the package.
+# NB: The package name will be discovered from manifest files (e.g. `pyproject.toml`).
+#     If there is no name detected (e.g. Cargo workspace), it will default to the directory name.
 name = "<auto detected>"
 # If `true`, detect nested packages if any.
+# NB: This will look for workspace members and auto-add them to the `[[packages]]` list.
 workspace = true
 # If `true`, prefix the git tag with the package name, e.g. `git-reflow-api-v1.0.0`.
 # NB: It will default to `false` for the first package else `true`.
@@ -91,3 +94,5 @@ make-latest = true
 
 # NB: Add any additional packages by adding another `[[packages]]` table entry.
 ```
+
+[`git-reflow`]: ../README.md
